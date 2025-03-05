@@ -1,0 +1,760 @@
+
+---
+title: "Part 1 Course Project"
+author: ""
+date: "14 Feb 2025"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+
+```{r, eval=FALSE, include=FALSE}
+getwd()
+
+session=list()
+for(i in 1:18){
+  session[[i]]=readRDS(paste("/Users/davisavantika/Code/STA141AProject/Data/session",i,'.rds',sep=''))
+  print(session[[i]]$mouse_name)
+  print(session[[i]]$date_exp)
+  print(length(session[[i]]$contrast_left))
+  print(length(session[[i]]$contrast_right))
+  print(length(session[[i]]$feedback_type))
+  print(length(session[[i]]$brain_area))
+  print(length(session[[i]]$spks))
+  print(length(session[[i]]$time))
+}
+```
+
+#logistical regression doesn't work well here
+
+
+## Overview
+
+This document contains instructions on the **course project** for STA 141A Winter 2025. This document is made with `R markdown`. The `rmd` file to generate this document is available on the course website. 
+
+# Background
+
+
+In this project, we analyze a subset of data collected by Steinmetz et al. (2019). While this document provides the basic understanding of the experiments, it is highly recommended that one consults the original publication for a more comprehensive understanding in order to improve the quality of the analysis report.
+
+
+In the study conducted by Steinmetz et al. (2019), experiments were performed on a total of 10 mice over 39 sessions. Each session comprised several hundred trials, during which visual stimuli were randomly presented to the mouse on two screens positioned on both sides of it. The stimuli varied in terms of contrast levels, which took values in {0, 0.25, 0.5, 1}, with 0 indicating the absence of a stimulus. The mice were required to make decisions based on the visual stimuli, using a wheel controlled by their forepaws. A reward or penalty (i.e., feedback) was subsequently administered based on the outcome of their decisions. In particular, 
+
+- When left contrast > right contrast, success (1) if turning the wheel to the right and failure (-1) otherwise.  
+- When right contrast > left contrast, success (1) if turning the wheel to the left and failure (-1) otherwise.  
+- When both left and right contrasts are zero, success (1) if holding the wheel still and failure (-1) otherwise. 
+- When left and right contrasts are equal but non-zero, left or right will be randomly chosen (50%) as the correct choice. 
+
+
+The activity of the neurons in the mice's visual cortex was recorded during the trials and made available in the form of spike trains, which are collections of timestamps corresponding to neuron firing. In this project, we focus specifically on the spike trains of neurons from the onset of the stimuli to 0.4 seconds post-onset. In addition, we only use 18 sessions (Sessions 1 to 18) from four mice: Cori, Frossman, Hence, and Lederberg.
+
+
+# Data structure 
+
+---
+
+A total of 18 RDS files are provided that contain the records from 18 sessions. In each RDS file, you can find the name of mouse from `mouse_name` and date of the experiment from `date_exp`. 
+
+Five variables are available for each trial, namely 
+
+- `feedback_type`: type of the feedback, 1 for success and -1 for failure
+- `contrast_left`: contrast of the left stimulus
+- `contrast_right`: contrast of the right stimulus
+- `time`: centers of the time bins for `spks`  
+- `spks`: numbers of spikes of neurons in the visual cortex in time bins defined in `time`
+- `brain_area`: area of the brain where each neuron lives
+
+Take the 11th trial in Session 5 for example, we can see that the left contrast for this trial is `r 
+session[[5]]$contrast_left[11]`  the right contrast is `r 
+session[[5]]$contrast_right[11]`, and the feedback (i.e., outcome) of the trial is `r session[[5]]$feedback_type[11]`. There are a total of `r length(session[[5]]$brain_area)` neurons in this trial from `r length(unique(session[[5]]$brain_area))` areas of the brain. The spike trains of these neurons are stored in `session[[5]]$spks[[11]]` which is a `r dim(session[[5]]$spks[[11]])[1]` by `r dim(session[[5]]$spks[[11]])[2]` matrix with each entry being the number of spikes of one neuron (i.e., row) in each time bin (i.e., column).
+
+```{r}
+#dim(session[[5]]$spks[[11]])[1]
+
+#dim(session[[5]]$spks[[11]])[2]
+```
+
+
+
+# Question of interest
+
+
+The primary objective of this project is to build a predictive model to predict the outcome (i.e., feedback type) of each trial using the neural activity data (i.e., spike trains in `spks`), along with the stimuli (the left and right contrasts). Given the complexity of the data (and that this is a course project), we break the predictive modeling into three parts as follows. 
+
+
+```{r}
+#outcome = feedback type
+#input: spks, left and right contrast
+```
+
+
+Part 1. Exploratory data analysis. In this part, we will explore the features of the data sets in order to build our prediction model. In particular, we would like to (i) describe the data structures across sessions (e.g., number of neurons, number of trials, stimuli conditions, feedback types), (ii) explore the neural activities during each trial, (iii) explore the changes across trials, and (iv) explore homogeneity and heterogeneity across sessions and mice. 
+
+
+```{r, include=FALSE}
+print(session[[1]]$spks[114])
+print(length(session[[1]]$brain_area))
+print(session[[1]]$time)
+```
+#Understanding the dataset
+This dataset contains 18 sessions. Each session contains within it the data of several variables: mouse name, date of experiment, left contrast, right contrast, feedback type, brain area, spikes, and time. 
+
+The left contrast, right contrast, feedback type, time, and spikes variables have the same length. This indicates that for a given contrast combination, the feedback type and the neural spike activity vs time was recorded. 
+
+Looking closer at the spike data, each contrast combination resulted in the spike activity being documented over the number of neurons analyzed and over time. The number of neurons matches the length of the brain area data, as each neuron is classified by its brain area. 
+
+#Number of neurons across sessions
+```{r, include=FALSE}
+summarydata <- data.frame(session=c(1:18), trials=c(1:18), neuronnumber=c(1:18), feedbacknumber=c(1:18))
+
+
+
+for(i in 1:18) {
+  summarydata$trials[i] <- length(session[[i]]$spks)
+  summarydata$feedbacknumber[i] <- length(session[[i]]$feedback_type)
+  summarydata$neuronnumber[i] <- length(session[[i]]$brain_area)
+}
+
+summarydata
+```
+
+#This code summarizes the basic facts about each session's data into a dataframe. This was taken from the class code to initally summarize data to identify what trends and relationships between variables to look into more closely. 
+```{r}
+n.session=length(session)
+
+# in library tidyverse
+meta <- tibble(
+  session_num = c(1:18),
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session)
+)
+
+
+for(i in 1:n.session){
+  tmp = session[[i]];
+  meta[i,2]=tmp$mouse_name;
+  meta[i,3]=tmp$date_exp;
+  meta[i,4]=length(unique(tmp$brain_area));
+  meta[i,5]=dim(tmp$spks[[1]])[1];
+  meta[i,6]=length(tmp$feedback_type);
+  meta[i,7]=mean(tmp$feedback_type+1)/2;
+  }
+
+meta
+
+
+
+ggplot(meta, mapping=aes(x=session_num, y=success_rate, color=mouse_name)) + geom_col()
+
+    #kable(meta, format = "html", table.attr = "class='table table-striped'",digits=2) 
+```
+```{r}
+ggplot(meta, mapping=aes(x=n_brain_area, y=success_rate, color=mouse_name)) + geom_point() + geom_line() +  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") + ggtitle("Number of brain areas vs Success Rate per Mouse over 18 sessions")
+```
+There seems to be a complex relationship between the number of brain areas whose neurons fire during this experiment and the success rate. I hypothesized that there might be a trend where an increased of brain areas fired may lead to higher success response rates. However, each mouse seems to demonstrate their own trend for the relationship between the variables of n_brain_area and success_rate. 
+
+Cori seems to have a slight positive linear trend, mice Forssmann and Hench seem to have a negative linear trend, and mouse Lederberg seems to have essentially no trend. 
+
+
+```{r}
+ggplot(meta, mapping=aes(x=n_brain_area, y=n_neurons, color=mouse_name)) + geom_point() + geom_line(linetype="dotted") +  geom_smooth(method = "lm", se = FALSE) + ggtitle("Number of brain areas vs Number of Neurons per Mouse over 18 sessions")
+```
+
+This graph demonstrates data towards the hypothesis that an increased number of brain areas involved resulted in a larger number of neurons being fired. However, the data suggests that there isn't a consistent trend between these two variables. In three out of the four mice, there is a general positive trend, where greater number of brain areas yield larger numbers of fired neurons. However in mouse Cori, we see the opposite trend. 
+
+This graph also demonstrates that different sessions of the same mouse have different numbers of brain areas and neurons fired. This is an interesting finding, as one would assume that the same replicated experiment would fire the same number of neurons and the same brain areas would be activated in the same mouse. 
+
+
+One next question to ask would be to understand how contrast pairs yield to successes or failures. 
+
+```{r}
+
+```
+
+
+
+```{r}
+ggplot(meta, mapping=aes(x=session_num, y=n_brain_area, color=mouse_name)) + geom_col() +ggtitle("Session Number vs Number of Brain Areas by Mouse")
+```
+This bar graph demonstrates in a different way that each session fired a different number of brain areas. Even sessions within the same mouse were not consistent in the number of brain areas fired. 
+
+
+
+```{r}
+session[[1]]$spks[1]
+session[[1]]$brain_area[1]
+
+average_spike_area <- function(trials, this_session) {
+  # Initialize an empty list to store results
+  results_list <- list()
+  
+  # Loop through each trial in the provided trials
+  for (i.t in trials) {
+    spk.trial <- this_session$spks[[i.t]]
+    area <- this_session$brain_area
+    spk.count <- apply(spk.trial, 1, sum)
+    spk.average <- tapply(spk.count, area, mean)
+    
+    # Convert to data frame and store trial index
+    trial_df <- data.frame(
+      trial = i.t,
+      brain_area = names(spk.average),
+      avg_spike_count = as.numeric(spk.average)
+    )
+    
+    results_list[[i.t]] <- trial_df
+  }
+  
+  # Combine all results into a single data frame
+  results_df <- do.call(rbind, results_list)
+  
+  return(results_df)
+}
+
+i = 2
+trial_indices <- 1:(length(session[[i]]$feedback_type))  # Example: trials 1 through 10
+results_df <- average_spike_area(trial_indices, session[[i]])
+print(results_df)
+
+ggplot(results_df, mapping=aes(x=brain_area, y=avg_spike_count, color=trial)) + geom_point() +stat_summary(fun = mean, geom = "point", size = 4, color = "red") 
+
+```
+This data frame demonstrates the average spike count in each brain region and in each trial of session 2. The graph shows us that there there is a difference between spike count and brain area. 
+
+
+```{r}
+# Initialize an empty list to store results from all sessions
+all_results_list <- list()
+
+# Loop through all sessions (i = 1:18)
+for (i in 1:18) {
+  trial_indices <- 1:(length(session[[i]]$feedback_type))  # Define trials
+  session_results <- average_spike_area(trial_indices, session[[i]])
+  session_results$session <- i  # Add session number
+  all_results_list[[i]] <- session_results  # Store results
+}
+
+# Combine all session data into one data frame
+all_results_df <- do.call(rbind, all_results_list)
+
+# Plot data for all sessions, faceting by session
+ggplot(all_results_df, aes(x = brain_area, y = avg_spike_count,  color = trial)) + 
+  geom_point(size = 1) +
+  stat_summary(fun = mean, geom = "point", size = 3, color = "red") +  # Red points for mean
+  facet_wrap(~ session, scales = "free_x", ncol = 6) +  # Facet by session, adjust columns
+  theme_minimal() +
+  labs(title = "Average Spike Count per Brain Area Across Sessions",
+       x = "Brain Area",
+       y = "Avg Spike Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+This graph demonstrates the average spike count of each brain area per session across all 18 sessions. 
+
+
+```{r}
+average_spike_area <- function(this_session) {
+  # Get the number of trials in the session dynamically
+  num_trials <- length(this_session$spks)
+  
+  # Initialize an empty list to store results
+  results_list <- list()
+  
+  # Loop through each trial
+  for (i.t in seq_len(num_trials)) {
+    spk.trial <- this_session$spks[[i.t]]
+    area <- this_session$brain_area
+    spk.count <- apply(spk.trial, 1, sum)
+    spk.average <- tapply(spk.count, area, mean)
+    
+    # Convert to data frame and store trial index
+    trial_df <- data.frame(
+      trial = i.t,
+      brain_area = names(spk.average),
+      avg_spike_count = as.numeric(spk.average)
+    )
+    
+    results_list[[i.t]] <- trial_df
+  }
+  
+  # Combine all results into a single data frame
+  results_df <- do.call(rbind, results_list)
+  
+  return(results_df)
+}
+
+# Function to process all sessions and account for different trial counts
+average_spike_area_all_sessions <- function(sessions) {
+  # Initialize an empty list for all session results
+  all_results_list <- list()
+  
+  # Loop through each session
+  for (session_idx in seq_along(sessions)) {
+    
+    this_session <- sessions[[session_idx]]  # ✅ Fix: Use [[ ]] instead of [ ]
+    
+    # Get the trial data for this session
+    session_df <- average_spike_area(this_session)
+    
+    # Add session index
+    session_df$session <- session_idx
+    
+    # Store in list
+    all_results_list[[session_idx]] <- session_df
+  }
+  
+  # Combine all session results into one big data frame
+  all_results_df <- do.call(rbind, all_results_list)
+  
+  return(all_results_df)
+}
+
+# ✅ Fix: Use `list()`, not `c()`
+#sessionlist <- list(session[[1]], session[[2]], session[[3]])
+
+# ✅ Fix: Use `lapply` for all 18 sessions
+sessionlist <- lapply(1:18, function(i) session[[i]])
+
+# Example usage
+results_df_allsessions <- average_spike_area_all_sessions(sessionlist)
+
+# Print the first few rows
+print(head(results_df_allsessions))
+dim(results_df_allsessions)
+```
+
+```{r}
+ggplot(results_df_allsessions, aes(x=brain_area, y=avg_spike_count, color=factor(session))) + 
+  geom_jitter(width = 0.2, height = 0, alpha = 0.5) +  # Jitter to reduce overlap
+  stat_summary(fun = mean, geom = "point", size = 5, shape = 18, color = "black") +  # Larger black mean points
+  scale_color_viridis_d(option = "plasma") +  # Better color scale
+  theme_minimal() +  # Cleaner theme
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
+  labs(title = "Average Spike Count by Brain Area and Session",
+       x = "Brain Area",
+       y = "Avg Spike Count",
+       color = "Session")  # Clearer labels
+```
+This graph collects the results across all sessions to identify the spike rate of different brain areas. The aggregate data also demonstrates certain brain areas with higher spike counts than other areas. 
+
+Using this data, I will do further investigation to understand whether higher average spike rates in these brain areas have any correlation with response success. I hypothesize currently that higher spike rates may lead to increased response success. 
+
+
+```{r}
+results_df_allsessions$mousename <- rep(0, nrow(results_df_allsessions))
+results_df_allsessions$feedback <- rep(0, nrow(results_df_allsessions))
+results_df_allsessions$rightcontrast <- rep(0, nrow(results_df_allsessions))
+results_df_allsessions$leftcontrast <- rep(0, nrow(results_df_allsessions))
+results_df_allsessions$contrastdiff <- rep(0, nrow(results_df_allsessions))
+
+for(i in 1:nrow(results_df_allsessions)){
+  sessnum <- as.numeric(results_df_allsessions$session[i])
+  results_df_allsessions$mousename[i] <- session[[sessnum]]$mouse_name
+  trialnum <-  as.numeric(results_df_allsessions$trial[i])
+  results_df_allsessions$feedback[i] <- session[[sessnum]]$feedback_type[[trialnum]]
+  results_df_allsessions$rightcontrast[i] <- session[[sessnum]]$contrast_right[[trialnum]]
+  results_df_allsessions$leftcontrast[i] <- session[[sessnum]]$contrast_left[[trialnum]]
+  results_df_allsessions$contrastdiff[i] <- results_df_allsessions$rightcontrast[i] - results_df_allsessions$leftcontrast[i]
+}
+
+head(results_df_allsessions)
+```
+```{r}
+results_df_allsessions[20000, ]
+unique(results_df_allsessions$contrastdiff)
+
+
+contrastdiff_counts <- results_df_allsessions %>%
+  count(contrastdiff) %>%
+  mutate(proportion = n / sum(n))
+
+print(contrastdiff_counts)
+
+
+
+```
+This table investigates the number and combination of contrast differences within the total data. The table demonstrates that there is not an equal proportion of each contrast combination within the data. 
+
+```{r}
+ggplot(results_df_allsessions, aes(x=brain_area, y=avg_spike_count, color=brain_area)) + 
+  geom_jitter(width = 0.2, height = 0, alpha = 0.5) +  # Jitter to reduce overlap
+  stat_summary(fun = mean, geom = "point", size = 5, shape = 18, color = "black") +  # Larger black mean points
+  scale_color_viridis_d(option = "plasma") +  # Better color scale
+  theme_minimal() +  # Cleaner theme
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
+  labs(title = "Average Spike Count by Brain Area and Mouse",
+       x = "Brain Area",
+       y = "Avg Spike Count",
+       color = "Session") +  # Clearer labels
+  facet_wrap(~mousename)
+```
+The graph above reiterates the differences in brain areas being triggered in different mice. It specifically demonstrates that the brain areas with highest average spike count may not be the same for each moouse. 
+
+
+```{r}
+common_brain_areas <- results_df_allsessions %>%
+  group_by(brain_area) %>%
+  summarise(session_count = n_distinct(session)) %>%
+  filter(session_count == n_distinct(results_df_allsessions$session)) %>%
+  pull(brain_area)
+
+# Print common brain areas
+print(common_brain_areas)
+```
+I wanted to check if there was a certain brain area that was common to all sessions that could be an indicator of success rate by firing. However, there are no brain areas that are common to all 18 sessions. 
+
+```{r}
+session_counts_per_mouse <- results_df_allsessions %>%
+  group_by(mousename) %>%
+  summarise(total_sessions = n_distinct(session))
+
+# Find common brain areas per mouse
+common_brain_areas_per_mouse <- results_df_allsessions %>%
+  group_by(mousename, brain_area) %>%
+  summarise(session_count = n_distinct(session), .groups = "drop") %>%
+  inner_join(session_counts_per_mouse, by = "mousename") %>%
+  filter(session_count == total_sessions) %>%
+  select(mousename, brain_area)
+
+# Print results
+print(common_brain_areas_per_mouse)
+```
+I then checked if there were brain areas common to the sessions of a given mouse. There is only one brain area common to mouse Cori and mouse Hench, being "root". The other two mice do not have a common brain area across all of their respective sessions. 
+
+```{r}
+
+ggplot(results_df_allsessions, aes(x = factor(feedback), y = avg_spike_count, fill = factor(feedback))) + 
+  geom_point() +  # Boxplot to show distribution
+  stat_summary(fun = mean, geom = "point", size = 3, color = "red", shape = 18) +  # Mean points
+  facet_wrap(~ brain_area, scales = "free") +  # Separate plots for each brain area
+  scale_fill_viridis_d(option = "plasma") +  # Color scale
+  theme_minimal() +  # Cleaner theme
+  labs(title = "Average Spike Count vs Feedback Type for Each Brain Area",
+       x = "Feedback Type",
+       y = "Average Spike Count",
+       fill = "Feedback") +  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+
+```{r}
+
+# Compute mean feedback per brain area
+feedback_summary <- results_df_allsessions %>%
+  group_by(brain_area, feedback) %>%
+  summarize(mean_spike = mean(avg_spike_count, na.rm = TRUE), .groups = "drop") %>%
+  spread(feedback, mean_spike)  # Convert feedback categories into separate columns
+
+# Compute difference between max and min feedback means
+feedback_summary <- feedback_summary %>%
+  mutate(feedback_diff = apply(select(., -brain_area), 1, function(x) max(x, na.rm = TRUE) - min(x, na.rm = TRUE))) %>% arrange(desc(by = feedback_diff))
+
+# Find the brain area with the largest difference
+largest_diff_brain_area <- feedback_summary %>%
+  arrange(desc(feedback_diff)) %>%
+  head(1)
+
+feedback_summary
+print(largest_diff_brain_area)
+
+```
+The dataframe above was designed to understand whether there is a difference in feedback type based on brain area. However, there seems to be a weak-to-no trend between the average spike count and feedback type. There isn't a distinctly greater spike count for positive feedback results versus negative feedback results. This dataframe identifies the top brain areas with the greatest differences in spike count. 
+
+**does higher spke count mean more success: not really 
+
+```{r}
+feedbacksummary_wide <- feedback_summary %>%
+  pivot_longer(cols = c(`-1`, `1`), names_to = "feedback", values_to = "value") %>%
+  pivot_wider(names_from = "feedback", values_from = "value")
+
+print(df_wide)
+```
+
+
+
+
+
+
+
+
+```{r}
+
+ggplot(results_df_allsessions, aes(x = factor(feedback), y = avg_spike_count, fill = factor(feedback))) + 
+  geom_point() +  # Boxplot to show distribution
+  stat_summary(fun = mean, geom = "point", size = 3, color = "red", shape = 18) +  # Mean points
+  facet_wrap(~ mousename, scales = "free") +  # Separate plots for each brain area
+  scale_fill_viridis_d(option = "plasma") +  # Color scale
+  theme_minimal() +  # Cleaner theme
+  labs(title = "Average Spike Count vs Feedback Type for Each Mouse",
+       x = "Feedback Type",
+       y = "Average Spike Count",
+       fill = "Feedback") +  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+
+
+```{r}
+ggplot(results_df_allsessions, aes(x=session, y=avg_spike_count)) + 
+  geom_jitter(width = 0.2, height = 0, alpha = 0.5) +  # Jitter to reduce overlap
+  stat_summary(fun = mean, geom = "point", size = 5, shape = 18, color = "red") +  # Larger black mean points
+  scale_color_viridis_d(option = "plasma") +  # Better color scale
+  theme_minimal() +  # Cleaner theme
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
+  labs(title = "Average Spike Count by Session",
+       x = "Session",
+       y = "Avg Spike Count")  # Clearer labels
+```
+Some sessions have a higher average spike count than others. 
+
+```{r}
+
+results_df_allsessions <- results_df_allsessions %>%
+  group_by(session) %>%
+  mutate(avg_spike_count_session_mean = mean(avg_spike_count, na.rm = TRUE))
+
+results_df_allsessions
+
+
+```
+
+
+```{r}
+results_df_allsessions$feedback <- as.factor(results_df_allsessions$feedback)
+results_df_allsessions$contrastdiff <- as.factor(results_df_allsessions$contrastdiff)
+
+# Compute proportions
+results_allsessions_summary <- results_df_allsessions %>%
+  group_by(contrastdiff, feedback) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(contrastdiff) %>%
+  mutate(prop = count / sum(count))  # Normalize by contrastdiff
+
+# Plot using proportions
+ggplot(results_allsessions_summary, aes(x = contrastdiff, y = prop, fill = feedback)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Contrast Difference", y = "Proportion", fill = "Feedback") 
+
+results_brainarea_summary <- results_df_allsessions %>%
+  group_by(contrastdiff, feedback, brain_area) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(contrastdiff, brain_area) %>%
+  mutate(prop = count / sum(count))  # Normalize by contrastdiff
+
+results_allsessions_summary
+results_brainarea_summary 
+
+ggplot(results_brainarea_summary, aes(x = contrastdiff, y = prop, fill = feedback)) +
+  geom_bar(stat = "identity", position = "dodge") + facet_wrap(~brain_area) +
+  labs(x = "Contrast Difference", y = "Proportion", fill = "Feedback") 
+
+results_mouse_summary <- results_df_allsessions %>%
+  group_by(contrastdiff, feedback, mousename) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(contrastdiff) %>%
+  mutate(prop = count / sum(count))  # Normalize by contrastdiff
+
+ggplot(results_mouse_summary, aes(x = contrastdiff, y = prop, fill = feedback)) +
+  geom_bar(stat = "identity", position = "dodge") + facet_wrap(~mousename) +
+  labs(x = "Contrast Difference", y = "Proportion", fill = "Feedback") 
+
+
+
+df_diff <- results_allsessions_summary %>%
+  group_by(contrastdiff) %>%
+  summarise(prop_diff = diff(prop))  # Calculates difference between the two proportions
+
+# Print the new dataframe
+print(df_diff)
+```
+This graph demonstrates that for large contrast trials, such as -1 or 1, there seems to be a larger proportion of successes (1) versus failures compared to low contrast trials (-1). This shows that contrast difference may be a good indicator of success. 
+
+```{r}
+ggplot(df_diff, mapping=aes(x=contrastdiff, y=prop_diff)) + geom_col()
+```
+This graph demonstrates there is a larger difference between the proportion of successes (1) versus proportion of failures (-1) in groups whith higher absolute contrastdiff values (such as -1 or 1) than ones with low absolute contrastdiff values (0). This shows us that contrast values within a trial seem to be correlated with mouse success. I will plan on including contrast values within my prediction model. 
+
+
+```{r}
+ggplot(results_allsessions_summary, aes(x = contrastdiff, y = prop, fill = feedback)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Contrast Difference", y = "Proportion", fill = "Feedback")  + facet_wrap(~ feedback)
+
+ggplot(results_df_allsessions, mapping=aes(x=contrastdiff, y=avg_spike_count)) + geom_jitter() + stat_summary(fun = mean, geom = "point", size = 1, shape = 18, color = "red") + facet_wrap(~ brain_area)
+
+
+avg_spike_count_per_contrastdiff <- results_df_allsessions %>%
+  group_by(contrastdiff, feedback) %>%
+  summarise(mean_spike_count = mean(avg_spike_count, na.rm = TRUE)) 
+
+# Print the new dataframe
+print(avg_spike_count_per_contrastdiff)
+
+ggplot()
+```
+```{r}
+ggplot(avg_spike_count_per_contrastdiff, aes(x = contrastdiff, y = mean_spike_count, group = feedback, color = feedback)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ feedback) +  # Optional: facet by feedback for separate panels
+  labs(title = "Mean Spike Count vs. Contrast Difference",
+       x = "Contrast Difference",
+       y = "Mean Spike Count")
+```
+
+
+```{r}
+avg_spike_count_diff <- avg_spike_count_per_contrastdiff %>%
+  group_by(contrastdiff) %>%
+  summarise(mean_spike_diff = diff(mean_spike_count)) 
+
+avg_spike_count_diff
+
+ggplot(avg_spike_count_diff, mapping=aes(x=contrastdiff, y=mean_spike_diff)) + geom_col()
+```
+
+
+
+
+I will continue to explore the relationship between feedback type and the brain areas of the neurons that spike in each trial. 
+
+I will also see if the same neurons that spike during a successful feedback hold true with different mice. 
+
+I will see if there is a difference in neuron type or feedback success in right versus left contrast. 
+
+
+is there a time point where there are more spikes?
+average_spk_count = average across all 40 time points i think 
+
+Part 2. Data integration. Using the findings in Part 1, we will propose an approach to combine data across trials by (i) extracting the shared patters across sessions and/or (ii) addressing the differences between sessions. The goal of this part is to enable the borrowing of information across sessions to enhance the prediction performance in Part 3. 
+
+Part 3. Model training and prediction. Finally, we will build a prediction model to predict the outcome (i.e., feedback types). The performance will be evaluated on two test sets of 100 trials randomly selected from Session 1 and Session 18, respectively. The test sets will be released on the day of submission when you need to evaluate the performance of your model. 
+
+# Project report outline 
+
+The final submission of the course project is a report in HTML format, along with a link to the Github repository that can be used to reproduce your report. The project report must be legible and the exposition of the report is part of the grading rubrics. For consistency in grading, please follow the outline listed below. 
+
+- Title.
+
+- Abstract (5 pts).
+
+- Section 1 Introduction (5 pts). 
+
+- Section 2 Exploratory analysis (20 pts). 
+
+- Section 3 Data integration (20 pts). 
+
+- Section 4 Predictive modeling (20 pts). 
+
+- Section 5 Prediction performance on the test sets (5 pts). 
+
+- Section 6 Discussion (5 pts). 
+
+In addition, the remaining 20 points will be allocated to report organization and legibility and creativity and originality. 
+
+
+# Project milestones
+
+A series of milestones are set throughout the quarter in order to encourage, and reward, early starts on the course project. Furthermore, there are several project discussion sessions throughout the quarter for students to utilize. 
+
+
+- Project proposal January 24th (optional): 0 points. Students are **strongly recommended** to attend the project discussion during the regular lecture time on Zoom. 
+- Milestone I February 14th  (optional): 0 points but eligible for bonus points for outstanding progress or novel findings. Draft analysis and results for Part I visualization. Students are **recommended** to attend the optional project discussion during the regular lecture time on Zoom. 
+- Milestone II March 7th (optional): 0 points but eligible for bonus points for outstanding progress or novel findings. Draft analysis and results for Part II data integration. Students are **recommended** to attend the optional project discussion during the regular lecture time on Zoom. 
+- March 17th Project report: 60 points. Students are **strongly recommended** to attend at least one project consulting session in Week 10. 
+
+
+**Remark**: One important thing to note is that a course project is not an exam where questions on the exam are kept confidential. Instead, the instructor and TAs are more than happy to share with you our thoughts on how to improve your projects before you submit them. From a practical perspective, it is more rewarding to solicit advice and suggestions before we grade your reports than to wait for feedback afterwards. That said, we understand that you may have other courses and obligations that are more important than this course. Therefore, all submissions and attendance are optional except for the final project report due on June 12th.
+
+# Reference {-}
+
+
+Steinmetz, N.A., Zatka-Haas, P., Carandini, M. et al. Distributed coding of choice, action and engagement across the mouse brain. Nature 576, 266–273 (2019). https://doi.org/10.1038/s41586-019-1787-x
+
+
+- Exploratory data analysis
+- raw data into matrix x
+- prediciton model: x --> y --> -1 or 1
+  - using matrix x 
+  
+  - average spike over time
+  
+  - for one session: put it into x matrix
+  - 
+  
+   plug picture into prediction model 
+   
+   - 01 matrix into signal: functional PCA to transformed signal
+  - outcome = 
+
+- TOC tells you how good the regression is
+- compare the different models to see which is better
+- feed PCA --> tabular data into here (look at last few weeks of notes to get to this point)
+
+*** can look at past rpojects for inspiration
+
+1) EDA
+feature ~ feedback (success/success+failure)
+
+Result: have few features you are goingn to incorporate
+- how does success vary with feature 
+- ex) feedback type vs brain area
+
+2) transform data to get X matrix: summary statistic or dimensional reduction technique (clustering/PCA)
+
+- for the pca, you input a dataframe that has all of the trials from all of the different sessions with all of the variables you think are important based ont he EDA portion
+- too many features = decreased prediction power
+- start with one sessionn, thenn concatenate other sessions after
+  - different sessions have different numbers of brain areas
+
+- dat matrix in Discussion 8: X matrix
+  - n observzations, feedback type, decisionn, average_spikes
+
+make a matrix of X: number of features, number of observations
+
+3) Fit a prediction model 
+ - looking at accuracy and area under curve (want model that yields highest values of both)
+  - look at percent error and area under curve
+ - look at many different types of models 
+ - logistic regression: strong bias towards success
+    -  can try to address this through resampling to have equal number of successes and failures in sample before making X matrix
+    - weighting the faiolure group
+  - model should perform better than a logistic regression
+  
+  
+  4) Test data set
+  - another way of checking strength of model
+    
+    
+  * spike correlated to success
+  - left contrast and right contrast
+    
+    
+    summation of wi(yi - fxi)^2
+ - loigstic regression is not a good model when using innput of summary statistic
+ 
+ 
+ 
+ 
+ - should we weight the data before prediction
+ -  after pca but before prediction
+ 
+ 
+ 
+ - format this report correctly
+ - document what is going on
+ 
+ 
+ 
+ - utilize code from discussion sections and proejct consulting sessions
+ 
+ 
