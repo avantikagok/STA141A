@@ -1,0 +1,4348 @@
+
+---
+title: "Part 1 Course Project"
+author: ""
+date: "14 Feb 2025"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+
+```{r, include=FALSE}
+getwd()
+setwd("/Users/davisavantika")
+session=list()
+for(i in 1:18){
+  session[[i]]=readRDS(paste("~/Code/STA141AProject/Data/session",i,'.rds',sep=''))
+  print(session[[i]]$mouse_name)
+  print(session[[i]]$date_exp)
+  print(length(session[[i]]$contrast_left))
+  print(length(session[[i]]$contrast_right))
+  print(length(session[[i]]$feedback_type))
+  print(length(session[[i]]$brain_area))
+  print(length(session[[i]]$spks))
+  print(length(session[[i]]$time))
+}
+```
+
+
+
+## Overview
+
+This document contains instructions on the **course project** for STA 141A Winter 2025. This document is made with `R markdown`. The `rmd` file to generate this document is available on the course website. 
+
+# Background
+
+
+In this project, we analyze a subset of data collected by Steinmetz et al. (2019). While this document provides the basic understanding of the experiments, it is highly recommended that one consults the original publication for a more comprehensive understanding in order to improve the quality of the analysis report.
+
+
+In the study conducted by Steinmetz et al. (2019), experiments were performed on a total of 10 mice over 39 sessions. Each session comprised several hundred trials, during which visual stimuli were randomly presented to the mouse on two screens positioned on both sides of it. The stimuli varied in terms of contrast levels, which took values in {0, 0.25, 0.5, 1}, with 0 indicating the absence of a stimulus. The mice were required to make decisions based on the visual stimuli, using a wheel controlled by their forepaws. A reward or penalty (i.e., feedback) was subsequently administered based on the outcome of their decisions. In particular, 
+
+- When left contrast > right contrast, success (1) if turning the wheel to the right and failure (-1) otherwise.  
+- When right contrast > left contrast, success (1) if turning the wheel to the left and failure (-1) otherwise.  
+- When both left and right contrasts are zero, success (1) if holding the wheel still and failure (-1) otherwise. 
+- When left and right contrasts are equal but non-zero, left or right will be randomly chosen (50%) as the correct choice. 
+
+
+The activity of the neurons in the mice's visual cortex was recorded during the trials and made available in the form of spike trains, which are collections of timestamps corresponding to neuron firing. In this project, we focus specifically on the spike trains of neurons from the onset of the stimuli to 0.4 seconds post-onset. In addition, we only use 18 sessions (Sessions 1 to 18) from four mice: Cori, Frossman, Hence, and Lederberg.
+
+
+# Data structure 
+
+---
+
+A total of 18 RDS files are provided that contain the records from 18 sessions. In each RDS file, you can find the name of mouse from `mouse_name` and date of the experiment from `date_exp`. 
+
+Five variables are available for each trial, namely 
+
+- `feedback_type`: type of the feedback, 1 for success and -1 for failure
+- `contrast_left`: contrast of the left stimulus
+- `contrast_right`: contrast of the right stimulus
+- `time`: centers of the time bins for `spks`  
+- `spks`: numbers of spikes of neurons in the visual cortex in time bins defined in `time`
+- `brain_area`: area of the brain where each neuron lives
+
+Take the 11th trial in Session 5 for example, we can see that the left contrast for this trial is `r 
+session[[5]]$contrast_left[11]`  the right contrast is `r 
+session[[5]]$contrast_right[11]`, and the feedback (i.e., outcome) of the trial is `r session[[5]]$feedback_type[11]`. There are a total of `r length(session[[5]]$brain_area)` neurons in this trial from `r length(unique(session[[5]]$brain_area))` areas of the brain. The spike trains of these neurons are stored in `session[[5]]$spks[[11]]` which is a `r dim(session[[5]]$spks[[11]])[1]` by `r dim(session[[5]]$spks[[11]])[2]` matrix with each entry being the number of spikes of one neuron (i.e., row) in each time bin (i.e., column).
+
+```{r}
+#dim(session[[5]]$spks[[11]])[1]
+
+#dim(session[[5]]$spks[[11]])[2]
+```
+
+
+
+# Question of interest
+
+
+The primary objective of this project is to build a predictive model to predict the outcome (i.e., feedback type) of each trial using the neural activity data (i.e., spike trains in `spks`), along with the stimuli (the left and right contrasts). Given the complexity of the data (and that this is a course project), we break the predictive modeling into three parts as follows. 
+
+
+```{r}
+#outcome = feedback type
+#input: spks, left and right contrast
+```
+
+
+Part 1. Exploratory data analysis. In this part, we will explore the features of the data sets in order to build our prediction model. In particular, we would like to (i) describe the data structures across sessions (e.g., number of neurons, number of trials, stimuli conditions, feedback types), (ii) explore the neural activities during each trial, (iii) explore the changes across trials, and (iv) explore homogeneity and heterogeneity across sessions and mice. 
+
+
+```{r, include=FALSE}
+print(session[[1]]$spks[114])
+print(length(session[[1]]$brain_area))
+print(session[[1]]$time)
+```
+#Understanding the dataset
+This dataset contains 18 sessions. Each session contains within it the data of several variables: mouse name, date of experiment, left contrast, right contrast, feedback type, brain area, spikes, and time. 
+
+The left contrast, right contrast, feedback type, time, and spikes variables have the same length. This indicates that for a given contrast combination, the feedback type and the neural spike activity vs time was recorded. 
+
+Looking closer at the spike data, each contrast combination resulted in the spike activity being documented over the number of neurons analyzed and over time. The number of neurons matches the length of the brain area data, as each neuron is classified by its brain area. 
+
+#Number of neurons across sessions
+```{r}
+summarydata <- data.frame(session=c(1:18), trials=c(1:18), neuronnumber=c(1:18), feedbacknumber=c(1:18))
+
+
+
+for(i in 1:18) {
+  summarydata$trials[i] <- length(session[[i]]$spks)
+  summarydata$feedbacknumber[i] <- length(session[[i]]$feedback_type)
+  summarydata$neuronnumber[i] <- length(session[[i]]$brain_area)
+}
+
+summarydata
+```
+
+#This code summarizes the basic facts about each session's data into a dataframe. This was taken from the class code to initally summarize data to identify what trends and relationships between variables to look into more closely. 
+
+
+
+```{r}
+n.session=length(session)
+
+# in library tidyverse
+meta <- tibble(
+  session_num = c(1:18),
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session)
+)
+
+
+for(i in 1:n.session){
+  tmp = session[[i]];
+  meta[i,2]=tmp$mouse_name;
+  meta[i,3]=tmp$date_exp;
+  meta[i,4]=length(unique(tmp$brain_area));
+  meta[i,5]=dim(tmp$spks[[1]])[1];
+  meta[i,6]=length(tmp$feedback_type);
+  meta[i,7]=mean(tmp$feedback_type+1)/2;
+  }
+
+meta
+
+
+
+ggplot(meta, mapping=aes(x=session_num, y=success_rate, color=mouse_name)) + geom_col()
+
+    #kable(meta, format = "html", table.attr = "class='table table-striped'",digits=2) 
+```
+
+
+```{r}
+# Calculate mean and standard deviation for each mouse
+mouse_stats <- aggregate(success_rate ~ mouse_name, data = meta, 
+                        FUN = function(x) c(mean = mean(x), sd = sd(x)))
+mouse_stats <- do.call(data.frame, mouse_stats)
+
+# Create a bar plot with error bars
+ggplot(mouse_stats, aes(x = mouse_name, y = success_rate.mean, fill = mouse_name)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = success_rate.mean - success_rate.sd, 
+                   ymax = success_rate.mean + success_rate.sd),
+                width = 0.2) +
+  labs(title = "Average Success Rate by Mouse with Standard Deviation",
+       x = "Mouse Name",
+       y = "Average Success Rate") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+We see that the average success rate in this experiment differs by mouse. Lederberg has the highest average success and Cori has the lowest average success. However, it is important to note that the sessions are not equally distributed by mouse. Cori only has 3 sessions worth of data, while Lederberg has 7 sessions worth of data. 
+
+
+
+Is there a correlation between brain area types and success rate?
+```{r}
+ggplot(meta, mapping=aes(x=n_brain_area, y=success_rate, color=mouse_name)) + geom_point() + geom_line() +  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") + ggtitle("Number of brain areas vs Success Rate per Mouse over 18 sessions")
+```
+There seems to be a complex relationship between the number of brain areas whose neurons fire during this experiment and the success rate. I hypothesized that there might be a trend where an increased of brain areas fired may lead to higher success response rates. However, each mouse seems to demonstrate their own trend for the relationship between the variables of n_brain_area and success_rate. 
+
+Cori seems to have a slight positive linear trend, mice Forssmann and Hench seem to have a negative linear trend, and mouse Lederberg seems to have essentially no trend. 
+
+
+```{r}
+ggplot(meta, mapping=aes(x=n_brain_area, y=n_neurons, color=mouse_name)) + geom_point() + geom_line(linetype="dotted") +  geom_smooth(method = "lm", se = FALSE) + ggtitle("Number of brain areas vs Number of Neurons per Mouse over 18 sessions")
+```
+
+This graph demonstrates data towards the hypothesis that an increased number of brain areas involved resulted in a larger number of neurons being fired. However, the data suggests that there isn't a consistent trend between these two variables. In three out of the four mice, there is a general positive trend, where greater number of brain areas yield larger numbers of fired neurons. However in mouse Cori, we see the opposite trend. 
+
+This graph also demonstrates that different sessions of the same mouse have different numbers of brain areas and neurons fired. This is an interesting finding, as one would assume that the same replicated experiment would fire the same number of neurons and the same brain areas would be activated in the same mouse. 
+
+
+One next question to ask would be to understand how contrast pairs yield to successes or failures. 
+
+
+
+```{r}
+ggplot(meta, mapping=aes(x=session_num, y=n_brain_area, color=mouse_name)) + geom_col() +ggtitle("Session Number vs Number of Brain Areas by Mouse")
+```
+This bar graph demonstrates in a different way that each session fired a different number of brain areas. Even sessions within the same mouse were not consistent in the number of brain areas fired. 
+
+
+
+```{r}
+session[[1]]$spks[1]
+session[[1]]$brain_area[1]
+
+average_spike_area <- function(trials, this_session) {
+  # Initialize an empty list to store results
+  results_list <- list()
+  
+  # Loop through each trial in the provided trials
+  for (i.t in trials) {
+    spk.trial <- this_session$spks[[i.t]]
+    area <- this_session$brain_area
+    spk.count <- apply(spk.trial, 1, sum)
+    spk.average <- tapply(spk.count, area, mean)
+    
+    # Convert to data frame and store trial index
+    trial_df <- data.frame(
+      trial = i.t,
+      brain_area = names(spk.average),
+      avg_spike_count = as.numeric(spk.average)
+    )
+    
+    results_list[[i.t]] <- trial_df
+  }
+  
+  # Combine all results into a single data frame
+  results_df <- do.call(rbind, results_list)
+  
+  return(results_df)
+}
+
+i = 2
+trial_indices <- 1:(length(session[[i]]$feedback_type))  # Example: trials 1 through 10
+results_df <- average_spike_area(trial_indices, session[[i]])
+print(results_df)
+
+ggplot(results_df, mapping=aes(x=brain_area, y=avg_spike_count, color=trial)) + geom_point() +stat_summary(fun = mean, geom = "point", size = 4, color = "red") 
+
+```
+This data frame demonstrates the average spike count in each brain region and in each trial of session 2. The graph shows us that there there is a difference between spike count and brain area. 
+
+
+```{r}
+# Initialize an empty list to store results from all sessions
+all_results_list <- list()
+
+# Loop through all sessions (i = 1:18)
+for (i in 1:18) {
+  trial_indices <- 1:(length(session[[i]]$feedback_type))  # Define trials
+  session_results <- average_spike_area(trial_indices, session[[i]])
+  session_results$session <- i  # Add session number
+  all_results_list[[i]] <- session_results  # Store results
+}
+
+# Combine all session data into one data frame
+all_results_df <- do.call(rbind, all_results_list)
+
+# Plot data for all sessions, faceting by session
+ggplot(all_results_df, aes(x = brain_area, y = avg_spike_count,  color = trial)) + 
+  geom_point(size = 1) +
+  stat_summary(fun = mean, geom = "point", size = 3, color = "red") +  # Red points for mean
+  facet_wrap(~ session, scales = "free_x", ncol = 6) +  # Facet by session, adjust columns
+  theme_minimal() +
+  labs(title = "Average Spike Count per Brain Area Across Sessions",
+       x = "Brain Area",
+       y = "Avg Spike Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+This graph demonstrates the average spike count of each brain area per session across all 18 sessions. 
+
+
+```{r}
+average_spike_area <- function(this_session) {
+  # Get the number of trials in the session dynamically
+  num_trials <- length(this_session$spks)
+  
+  # Initialize an empty list to store results
+  results_list <- list()
+  
+  # Loop through each trial
+  for (i.t in seq_len(num_trials)) {
+    spk.trial <- this_session$spks[[i.t]]
+    area <- this_session$brain_area
+    spk.count <- apply(spk.trial, 1, sum)
+    spk.average <- tapply(spk.count, area, mean)
+    
+    # Convert to data frame and store trial index
+    trial_df <- data.frame(
+      trial = i.t,
+      brain_area = names(spk.average),
+      avg_spike_count = as.numeric(spk.average)
+    )
+    
+    results_list[[i.t]] <- trial_df
+  }
+  
+  # Combine all results into a single data frame
+  results_df <- do.call(rbind, results_list)
+  
+  return(results_df)
+}
+
+# Function to process all sessions and account for different trial counts
+average_spike_area_all_sessions <- function(sessions) {
+  # Initialize an empty list for all session results
+  all_results_list <- list()
+  
+  # Loop through each session
+  for (session_idx in seq_along(sessions)) {
+    
+    this_session <- sessions[[session_idx]]  # ✅ Fix: Use [[ ]] instead of [ ]
+    
+    # Get the trial data for this session
+    session_df <- average_spike_area(this_session)
+    
+    # Add session index
+    session_df$session <- session_idx
+    
+    # Store in list
+    all_results_list[[session_idx]] <- session_df
+  }
+  
+  # Combine all session results into one big data frame
+  all_results_df <- do.call(rbind, all_results_list)
+  
+  return(all_results_df)
+}
+
+# ✅ Fix: Use `list()`, not `c()`
+#sessionlist <- list(session[[1]], session[[2]], session[[3]])
+
+# ✅ Fix: Use `lapply` for all 18 sessions
+sessionlist <- lapply(1:18, function(i) session[[i]])
+
+# Example usage
+results_df_allsessions <- average_spike_area_all_sessions(sessionlist)
+
+# Print the first few rows
+print(head(results_df_allsessions))
+dim(results_df_allsessions)
+```
+
+```{r}
+ggplot(results_df_allsessions, aes(x=brain_area, y=avg_spike_count, color=factor(session))) + 
+  geom_jitter(width = 0.2, height = 0, alpha = 0.5) +  # Jitter to reduce overlap
+  stat_summary(fun = mean, geom = "point", size = 5, shape = 18, color = "black") +  # Larger black mean points
+  scale_color_viridis_d(option = "plasma") +  # Better color scale
+  theme_minimal() +  # Cleaner theme
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
+  labs(title = "Average Spike Count by Brain Area and Session",
+       x = "Brain Area",
+       y = "Avg Spike Count",
+       color = "Session")  # Clearer labels
+```
+This graph collects the results across all sessions to identify the spike rate of different brain areas. The aggregate data also demonstrates certain brain areas with higher spike counts than other areas. 
+
+Using this data, I will do further investigation to understand whether higher average spike rates in these brain areas have any correlation with response success. I hypothesize currently that higher spike rates may lead to increased response success. 
+
+
+```{r}
+results_df_allsessions$mousename <- rep(0, nrow(results_df_allsessions))
+results_df_allsessions$feedback <- rep(0, nrow(results_df_allsessions))
+results_df_allsessions$rightcontrast <- rep(0, nrow(results_df_allsessions))
+results_df_allsessions$leftcontrast <- rep(0, nrow(results_df_allsessions))
+results_df_allsessions$contrastdiff <- rep(0, nrow(results_df_allsessions))
+
+for(i in 1:nrow(results_df_allsessions)){
+  sessnum <- as.numeric(results_df_allsessions$session[i])
+  results_df_allsessions$mousename[i] <- session[[sessnum]]$mouse_name
+  trialnum <-  as.numeric(results_df_allsessions$trial[i])
+  results_df_allsessions$feedback[i] <- session[[sessnum]]$feedback_type[[trialnum]]
+  results_df_allsessions$rightcontrast[i] <- session[[sessnum]]$contrast_right[[trialnum]]
+  results_df_allsessions$leftcontrast[i] <- session[[sessnum]]$contrast_left[[trialnum]]
+  results_df_allsessions$contrastdiff[i] <- results_df_allsessions$rightcontrast[i] - results_df_allsessions$leftcontrast[i]
+}
+
+head(results_df_allsessions)
+```
+```{r}
+# Filter the data for session 2
+session2_data <- results_df_allsessions[results_df_allsessions$session == 5, ]
+
+# If you want to see how spike counts vary by brain area
+
+
+
+# Assuming your original plot code is similar to this
+ggplot(session2_data, aes(x = trial, y = avg_spike_count, color = as.factor(feedback))) +
+  geom_line(alpha = 0.5) +
+  facet_wrap(~ brain_area) +
+  labs(title = "Average Spike Count by Trial for Each Brain Area in Session 2",
+       x = "Trial",
+       y = "Average Spike Count") +
+  
+  # Add smoothed trend lines for each feedback value
+  geom_smooth(method = "loess", se = FALSE, linewidth = 1.2) +
+  
+  # Customize colors and labels
+  scale_color_manual(values = c("-1" = "red", "1" = "turquoise"), 
+                     name = "feedback") +
+  
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+results_df_allsessions[20000, ]
+unique(results_df_allsessions$contrastdiff)
+
+
+contrastdiff_counts <- results_df_allsessions %>%
+  ungroup() %>% 
+  mutate(contrastdiff = as.numeric(as.character(contrastdiff))) %>%
+  count(contrastdiff) %>%
+  mutate(proportion = n / sum(n))
+
+contrastdiff_counts
+
+contrastdiff_counts$sign <- ifelse(contrastdiff_counts$contrastdiff < 0, "negative", 
+                       ifelse(contrastdiff_counts$contrastdiff > 0, "positive", "zero"))
+
+
+print(contrastdiff_counts)
+
+
+
+
+
+```
+This table investigates the number and combination of contrast differences within the total data. The table demonstrates that there is not an equal proportion of each contrast combination within the data. 
+
+```{r}
+ggplot(contrastdiff_counts, mapping=aes(x = "", y = proportion, fill = factor(contrastdiff))) + geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") + labs(title = "Pie chart demonstrating proportion of trials with contrast differences", subtitle= "(contrast_right - contrast_left)", fill="Contrast Difference") 
+```
+The pie chart above further illustrates this point. We see from the pie chart as well as from the table that the value of 0 contrast_diff makes up a much larger proportion of the data than the other contrast_diffs. I calculated the value of "contrast_diff" through the method: contrast_right - contrast_left. Therefore, negative values of contrast_diff indicate that there was a higher contrast_left value than contrast_right, while positive values indicate that there was a higher contrast_right value than contrast left. 
+
+A contrast_diff value of 0 can come from two methods. One scenario is when both left and right contrasts are 0. Another scenario is when left and right contrasts are equal, but non-zero. 
+
+The constrast_diff value of 0 is particularly important for me to consider in regards to prediction power in further steps of this assignment. Given that the mouse's actions in the second case do not have a bearing on the success of the trial, it stands out as different compared to other trials. Thus, including this data may be problematic to overall predictions. 
+
+"When left and right contrasts are equal but non-zero, left or right will be randomly chosen (50%) as the correct choice." 
+
+```{r}
+ggplot(contrastdiff_counts, mapping = aes(x=contrastdiff, y=proportion, fill = sign)) + geom_col() + facet_wrap(~abs(contrastdiff))
+```
+
+
+
+
+```{r}
+zero_contrast_diff <- results_df_allsessions %>%
+  filter(contrastdiff == 0) %>%
+  ungroup %>% 
+  mutate(left_contrast_category = ifelse(leftcontrast != 0, "Non-zero", "Zero")) %>%
+  count(left_contrast_category) %>%
+  mutate(proportion = n / sum(n))
+
+zero_contrast_diff
+
+```
+
+```{r}
+ggplot(zero_contrast_diff, mapping=aes(x = "", y = proportion, fill = factor(left_contrast_category))) + geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") + labs(title = "Contrast_diff = 0 trials", subtitle= "Proportion of trials where left/right contrast do not equal 0", fill="Left Contrast Category") 
+```
+
+
+I chose to investigate the trials where contrast_diff = 0 in more detail, in order to understand how many of these trials involve both left contrast and right contrast being 0 versus the left contrast and right contrast having equivalent but non-zero values. In the second case, if right contrast and left contrast are equal but non-zero, their difference (contrast_diff) will equal 0. I chose to look at the left contrast values, comparing the instances where left contrast = 0 versus instances where left contrast did not equal 0. 
+
+As I mentioned previously, this distinction is important because the mouse's behavior in the first scenario truly yields a success/failure based on the mouse's decision, while the second scenario yields a success/failure randomly. Therefore, I wanted to see what proportion of trials where contrast_diff = 0 came from each scenario. 
+
+The analysis demonstrates that around 80% of trials where contrast_diff = 0 come from the first scenario, where the left and right contrasts were both 0, and the mouse either successfully held the wheel still or incorrectly moved the wheel. 
+
+20% of trials were instances of the left and right contrasts being equal but non-zero. This means that 0.32896102	* 0.1877473 = 0.06176154  (6.17%) of all trials had feedbacks that were randomly assigned, rather than being correlated with the mouse's behavior.  This is a relatively small proportion of the total data, but is important to note when I build my prediction model. 
+
+
+
+
+
+```{r}
+ggplot(results_df_allsessions, aes(x=brain_area, y=avg_spike_count, color=brain_area)) + 
+  geom_jitter(width = 0.2, height = 0, alpha = 0.5) +  # Jitter to reduce overlap
+  stat_summary(fun = mean, geom = "point", size = 5, shape = 18, color = "black") +  # Larger black mean points
+  scale_color_viridis_d(option = "plasma") +  # Better color scale
+  theme_minimal() +  # Cleaner theme
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
+  labs(title = "Average Spike Count by Brain Area and Mouse",
+       x = "Brain Area",
+       y = "Avg Spike Count",
+       color = "Session") +  # Clearer labels
+  facet_wrap(~mousename)
+```
+The graph above reiterates the differences in brain areas being triggered in different mice. It specifically demonstrates that the brain areas with highest average spike count may not be the same for each moouse. 
+
+
+```{r}
+common_brain_areas <- results_df_allsessions %>%
+  group_by(brain_area) %>%
+  summarise(session_count = n_distinct(session)) %>%
+  filter(session_count == n_distinct(results_df_allsessions$session)) %>%
+  pull(brain_area)
+
+# Print common brain areas
+print(common_brain_areas)
+```
+I wanted to check if there was a certain brain area that was common to all sessions that could be an indicator of success rate by firing. However, there are no brain areas that are common to all 18 sessions. 
+
+```{r}
+session_counts_per_mouse <- results_df_allsessions %>%
+  group_by(mousename) %>%
+  summarise(total_sessions = n_distinct(session))
+
+# Find common brain areas per mouse
+common_brain_areas_per_mouse <- results_df_allsessions %>%
+  group_by(mousename, brain_area) %>%
+  summarise(session_count = n_distinct(session), .groups = "drop") %>%
+  inner_join(session_counts_per_mouse, by = "mousename") %>%
+  filter(session_count == total_sessions) %>%
+ dplyr::select(mousename, brain_area)
+
+# Print results
+print(common_brain_areas_per_mouse)
+```
+I then checked if there were brain areas common to the sessions of a given mouse. There is only one brain area common to mouse Cori and mouse Hench, being "root". The other two mice do not have a common brain area across all of their respective sessions. 
+
+```{r}
+
+ggplot(results_df_allsessions, aes(x = factor(feedback), y = avg_spike_count, fill = factor(feedback))) + 
+  geom_point() +  # Boxplot to show distribution
+  stat_summary(fun = mean, geom = "point", size = 3, color = "red", shape = 18) +  # Mean points
+  facet_wrap(~ brain_area, scales = "free") +  # Separate plots for each brain area
+  scale_fill_viridis_d(option = "plasma") +  # Color scale
+  theme_minimal() +  # Cleaner theme
+  labs(title = "Average Spike Count vs Feedback Type for Each Brain Area",
+       x = "Feedback Type",
+       y = "Average Spike Count",
+       fill = "Feedback") +  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+
+```{r}
+
+# Compute mean feedback per brain area
+feedback_summary <- results_df_allsessions %>%
+  group_by(brain_area, feedback) %>%
+  summarize(mean_spike = mean(avg_spike_count, na.rm = TRUE), .groups = "drop") %>%
+  spread(feedback, mean_spike)  # Convert feedback categories into separate columns
+
+# Compute difference between max and min feedback means
+feedback_summary <- feedback_summary %>%
+  mutate(feedback_diff = apply(dplyr::select(., -brain_area), 1, function(x) max(x, na.rm = TRUE) - min(x, na.rm = TRUE))) %>% arrange(desc(by = feedback_diff))
+
+# Find the brain area with the largest difference
+largest_diff_brain_area <- feedback_summary %>%
+  arrange(desc(feedback_diff)) %>%
+  head(1)
+
+feedback_summary
+print(largest_diff_brain_area)
+
+```
+The dataframe above was designed to understand whether there is a difference in feedback type based on brain area. However, there seems to be a weak-to-no trend between the average spike count and feedback type. There isn't a distinctly greater spike count for positive feedback results versus negative feedback results. This dataframe identifies the top brain areas with the greatest differences in spike count. 
+
+
+
+```{r}
+# Assuming your data is in a dataframe called 'df'
+# with columns 'brain_area', '-1', and '1'
+
+# Perform paired t-test
+result <- t.test(feedback_summary$`-1`, feedback_summary$`1`, paired = TRUE)
+
+# Print the result
+print(result)
+
+# If you want to see the p-value specifically
+print(paste("p-value:", result$p.value))
+```
+I conducted a paired t-test to see if there was a statistically significant difference in average spike count between successful and unsuccessful trials across all brain areas recorded in this dataset. The paired t-test yielded a p-value of 9.564e-09. If we set a threshold of 0.05, we see that the p-value is significant. This indicates that there is a statistically significant difference in average spike count between successful and unsuccessful trials. This tells us that average spike count is an indicator of success/failure, and should be included in our prediction model. 
+
+
+```{r}
+t_test_result <- t.test(avg_spike_count ~ feedback, data = results_df_allsessions, paired = FALSE)
+print(t_test_result)
+```
+I also conducted a t-test on the entire dataset. Here, we also see a statistically difference in the means between the average spike counts of successful versus unsuccessful trials. This corroberates the previous t-test. 
+
+
+
+
+
+
+
+```{r}
+feedbacksummary_long <- feedback_summary %>%
+  pivot_longer(cols = c(`-1`, `1`), names_to = "feedback", values_to = "value") 
+
+
+print(feedbacksummary_long)
+```
+
+
+
+
+
+
+
+
+```{r}
+
+ggplot(results_df_allsessions, aes(x = factor(feedback), y = avg_spike_count, fill = factor(feedback))) + 
+  geom_point() +  # Boxplot to show distribution
+  stat_summary(fun = mean, geom = "point", size = 3, color = "red", shape = 18) +  # Mean points
+  facet_wrap(~ mousename, scales = "free") +  # Separate plots for each brain area
+  scale_fill_viridis_d(option = "plasma") +  # Color scale
+  theme_minimal() +  # Cleaner theme
+  labs(title = "Average Spike Count vs Feedback Type for Each Mouse",
+       x = "Feedback Type",
+       y = "Average Spike Count",
+       fill = "Feedback") +  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+
+
+```{r}
+ggplot(results_df_allsessions, aes(x=session, y=avg_spike_count)) + 
+  geom_jitter(width = 0.2, height = 0, alpha = 0.5) +  # Jitter to reduce overlap
+  stat_summary(fun = mean, geom = "point", size = 5, shape = 18, color = "red") +  # Larger black mean points
+  scale_color_viridis_d(option = "plasma") +  # Better color scale
+  theme_minimal() +  # Cleaner theme
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
+  labs(title = "Average Spike Count by Session",
+       x = "Session",
+       y = "Avg Spike Count")  # Clearer labels
+```
+Some sessions have a higher average spike count than others. 
+
+```{r}
+
+results_df_allsessions <- results_df_allsessions %>%
+  group_by(session) %>%
+  mutate(avg_spike_count_session_mean = mean(avg_spike_count, na.rm = TRUE))
+
+results_df_allsessions <- results_df_allsessions %>%
+  group_by(session, trial) %>%
+  mutate(avg_spike_count_trial_mean = mean(avg_spike_count, na.rm = TRUE))
+
+results_df_allsessions
+
+
+```
+
+
+```{r}
+results_df_allsessions$feedback <- as.factor(results_df_allsessions$feedback)
+results_df_allsessions$contrastdiff <- as.factor(results_df_allsessions$contrastdiff)
+
+# Compute proportions
+results_allsessions_summary <- results_df_allsessions %>%
+  group_by(contrastdiff, feedback) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(contrastdiff) %>%
+  mutate(prop = count / sum(count))  # Normalize by contrastdiff
+
+# Plot using proportions
+ggplot(results_allsessions_summary, aes(x = contrastdiff, y = prop, fill = feedback)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Contrast Difference", y = "Proportion", fill = "Feedback") 
+
+results_brainarea_summary <- results_df_allsessions %>%
+  group_by(contrastdiff, feedback, brain_area) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(contrastdiff, brain_area) %>%
+  mutate(prop = count / sum(count))  # Normalize by contrastdiff
+
+results_allsessions_summary
+results_brainarea_summary 
+
+ggplot(results_brainarea_summary, aes(x = contrastdiff, y = prop, fill = feedback)) +
+  geom_bar(stat = "identity", position = "dodge") + facet_wrap(~brain_area) +
+  labs(x = "Contrast Difference", y = "Proportion", fill = "Feedback") 
+
+results_mouse_summary <- results_df_allsessions %>%
+  group_by(contrastdiff, feedback, mousename) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(contrastdiff) %>%
+  mutate(prop = count / sum(count))  # Normalize by contrastdiff
+
+ggplot(results_mouse_summary, aes(x = contrastdiff, y = prop, fill = feedback)) +
+  geom_bar(stat = "identity", position = "dodge") + facet_wrap(~mousename) +
+  labs(x = "Contrast Difference", y = "Proportion", fill = "Feedback") 
+
+
+
+df_diff <- results_allsessions_summary %>%
+  group_by(contrastdiff) %>%
+  summarise(prop_diff = diff(prop))  # Calculates difference between the two proportions
+
+# Print the new dataframe
+print(df_diff)
+```
+This graph demonstrates that for large contrast trials, such as -1 or 1, there seems to be a larger proportion of successes (1) versus failures compared to low contrast trials (-1). This shows that contrast difference may be a good indicator of success. I will include this variable in my prediction model. 
+
+
+
+
+```{r}
+ggplot(df_diff, mapping=aes(x=contrastdiff, y=prop_diff)) + geom_col()
+```
+This graph demonstrates there is a larger difference between the proportion of successes (1) versus proportion of failures (-1) in groups whith higher absolute contrastdiff values (such as -1 or 1) than ones with low absolute contrastdiff values (0). This shows us that contrast values within a trial seem to be correlated with mouse success. I will plan on including contrast values within my prediction model. 
+
+
+
+
+
+```{r}
+contingency_table <- xtabs(count ~ contrastdiff + feedback, data = results_allsessions_summary)
+print(contingency_table)
+
+# Chi-square test of independence
+chi_square_result <- chisq.test(contingency_table)
+print(chi_square_result)
+
+# If you want to use Fisher's exact test (especially for small counts)
+# Note: This might be computationally intensive for large tables
+fisher_result <- fisher.test(contingency_table, simulate.p.value = TRUE, B = 10000)
+print(fisher_result)
+
+# Visualize the relationship
+library(ggplot2)
+
+# Convert to long format for proportion plotting
+results_allsessions_summary$prop <- results_allsessions_summary$count / sum(results_allsessions_summary$count)
+
+# Plot the proportions
+ggplot(results_allsessions_summary, aes(x = contrastdiff, y = prop, fill = feedback)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Proportion by Contrast Difference and Feedback",
+       x = "Contrast Difference",
+       y = "Proportion") +
+  theme_minimal()
+```
+I wanted to conduct a statistical test to see whether there was a statistically significant correlation between contrast difference and feedback type. I conducted a Chi Square Test of Independence and a Fisher Test of Indepenence. Both tests yielded p-values under 0.05, indicating that tere is a relationship between contrast difference and feedback type. Thus, this gives me evidence to include contrast difference, or a similar interaction variable between left and right contrast, into my prediction model. 
+
+
+```{r}
+ggplot(results_allsessions_summary, aes(x = contrastdiff, y = prop, fill = feedback)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Contrast Difference", y = "Proportion", fill = "Feedback")  + facet_wrap(~ feedback)
+
+ggplot(results_df_allsessions, mapping=aes(x=contrastdiff, y=avg_spike_count)) + geom_jitter() + stat_summary(fun = mean, geom = "point", size = 1, shape = 18, color = "red") + facet_wrap(~ brain_area)
+
+
+avg_spike_count_per_contrastdiff <- results_df_allsessions %>%
+  group_by(contrastdiff, feedback) %>%
+  summarise(mean_spike_count = mean(avg_spike_count, na.rm = TRUE)) 
+
+# Print the new dataframe
+print(avg_spike_count_per_contrastdiff)
+
+```
+```{r}
+ggplot(avg_spike_count_per_contrastdiff, aes(x = contrastdiff, y = mean_spike_count, group = feedback, color = feedback)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ feedback) +  # Optional: facet by feedback for separate panels
+  labs(title = "Mean Spike Count vs. Contrast Difference",
+       x = "Contrast Difference",
+       y = "Mean Spike Count")
+```
+
+```{r}
+ggplot(results_df_allsessions, mapping=aes(x=trial, y=avg_spike_count_trial_mean)) + geom_line() + facet_wrap(~session)
+```
+
+
+
+```{r}
+avg_spike_count_diff <- avg_spike_count_per_contrastdiff %>%
+  group_by(contrastdiff) %>%
+  summarise(mean_spike_diff = diff(mean_spike_count)) 
+
+avg_spike_count_diff
+
+ggplot(avg_spike_count_diff, mapping=aes(x=contrastdiff, y=mean_spike_diff)) + geom_col()
+```
+
+
+I now want to conduct PCA on the average spike data for each session. I want to do this in order to reduce the number of dimensions needed to account for brain area spike count data.
+
+
+
+
+```{r, eval=FALSE}
+# Create a function to analyze a single session
+analyze_session_pca <- function(session_data, session_id) {
+  # First check if spks has elements
+  if (length(session_data$spks) == 0) {
+    cat("Session", session_id, ": The spks list is empty\n")
+    return(list(success = FALSE, message = "The spks list is empty"))
+  } 
+  
+  # Check if any elements have length > 0
+  element_lengths <- sapply(session_data$spks, length)
+  
+  if (all(element_lengths == 0)) {
+    cat("Session", session_id, ": All elements in spks are empty\n")
+    return(list(success = FALSE, message = "All elements in spks are empty"))
+  } 
+  
+  cat("Session", session_id, ": Found non-empty elements in spks. Continuing with matrix creation...\n")
+  
+  # Proceed with the original code
+  n_trials <- length(session_data$spks)
+  max_length <- max(element_lengths)
+  
+  cat("  Number of trials:", n_trials, "\n")
+  cat("  Max length of spike vectors:", max_length, "\n")
+  
+  spike_matrix <- matrix(0, nrow = n_trials, ncol = max_length)
+  
+  # Fill the matrix with spike data - more robustly
+  for (i in 1:n_trials) {
+    if (length(session_data$spks[[i]]) > 0) {
+      spk_data <- session_data$spks[[i]]
+      spike_matrix[i, 1:length(spk_data)] <- spk_data
+    }
+  }
+  
+  # Check if the matrix has any non-zero values
+  if (all(spike_matrix == 0)) {
+    cat("  Warning: Spike matrix contains only zeros\n")
+    return(list(success = FALSE, message = "Spike matrix contains only zeros"))
+  }
+  
+  # Check column variances
+  col_vars <- apply(spike_matrix, 2, var)
+  non_zero_vars <- sum(col_vars > 0)
+  
+  cat("  Columns with non-zero variance:", non_zero_vars, "out of", ncol(spike_matrix), "\n")
+  
+  if (non_zero_vars >= 2) {
+    # Keep only columns with variance
+    spike_matrix_filtered <- spike_matrix[, col_vars > 0, drop = FALSE]
+    cat("  Running PCA on filtered matrix with dimensions:", dim(spike_matrix_filtered), "\n")
+    
+    # Run PCA
+    tryCatch({
+      pca_result <- prcomp(spike_matrix_filtered, scale = TRUE)
+      
+      # Calculate variance explained
+      var_explained <- pca_result$sdev^2 / sum(pca_result$sdev^2)
+      cumulative_var <- cumsum(var_explained)
+      
+      # Number of PCs for different thresholds
+      pcs_90 <- min(which(cumulative_var >= 0.9))
+      if (is.infinite(pcs_90)) pcs_90 <- length(var_explained)
+      
+      pcs_95 <- min(which(cumulative_var >= 0.95))
+      if (is.infinite(pcs_95)) pcs_95 <- length(var_explained)
+      
+      pcs_99 <- min(which(cumulative_var >= 0.99))
+      if (is.infinite(pcs_99)) pcs_99 <- length(var_explained)
+      
+      pcs_100 <- length(var_explained)
+      
+      cat("  PCs for 90% variance:", pcs_90, "\n")
+      cat("  PCs for 95% variance:", pcs_95, "\n")
+      cat("  PCs for 99% variance:", pcs_99, "\n")
+      cat("  PCs for 100% variance:", pcs_100, "\n")
+      
+      return(list(
+        success = TRUE,
+        session_id = session_id,
+        n_trials = n_trials,
+        n_features = non_zero_vars,
+        pcs_90 = pcs_90,
+        pcs_95 = pcs_95,
+        pcs_99 = pcs_99,
+        pcs_100 = pcs_100,
+        var_explained = var_explained
+      ))
+    }, error = function(e) {
+      cat("  Error in PCA:", e$message, "\n")
+      return(list(success = FALSE, message = paste("Error in PCA:", e$message)))
+    })
+  } else {
+    cat("  Not enough columns with variance for PCA\n")
+    return(list(success = FALSE, message = "Not enough columns with variance for PCA"))
+  }
+}
+
+# Process all 18 sessions
+results <- list()
+for (i in 1:18) {
+  cat("\nAnalyzing session", i, "\n")
+  
+  # Check if session exists
+  if (exists(paste0("session", i)) || exists("session") && length(session) >= i) {
+    # Get the correct session data
+    if (exists(paste0("session", i))) {
+      session_data <- get(paste0("session", i))
+    } else {
+      session_data <- session[[i]]
+    }
+    
+    # Analyze the session
+    result <- analyze_session_pca(session_data, i)
+    results[[as.character(i)]] <- result
+  } else {
+    cat("Session", i, "data not found\n")
+    results[[as.character(i)]] <- list(success = FALSE, message = "Session data not found")
+  }
+}
+
+# Create summary table
+summary_table <- data.frame(
+  Session = integer(),
+  NumTrials = integer(),
+  NumFeatures = integer(),
+  PCs_90_percent = integer(),
+  PCs_95_percent = integer(),
+  PCs_99_percent = integer(),
+  PCs_100_percent = integer()
+)
+
+for (session_id in names(results)) {
+  result <- results[[session_id]]
+  if (result$success) {
+    summary_table <- rbind(summary_table, data.frame(
+      Session = as.integer(session_id),
+      NumTrials = result$n_trials,
+      NumFeatures = result$n_features,
+      PCs_90_percent = result$pcs_90,
+      PCs_95_percent = result$pcs_95,
+      PCs_99_percent = result$pcs_99,
+      PCs_100_percent = result$pcs_100
+    ))
+  } else {
+    # Add a row with NA values for failed sessions
+    summary_table <- rbind(summary_table, data.frame(
+      Session = as.integer(session_id),
+      NumTrials = NA,
+      NumFeatures = NA,
+      PCs_90_percent = NA,
+      PCs_95_percent = NA,
+      PCs_99_percent = NA,
+      PCs_100_percent = NA
+    ))
+  }
+}
+
+# Sort by session and print
+summary_table <- summary_table[order(summary_table$Session), ]
+print(summary_table)
+
+# Calculate percentage of features needed
+summary_table$Percent_PCs_90 <- (summary_table$PCs_90_percent / summary_table$NumFeatures) * 100
+summary_table$Percent_PCs_95 <- (summary_table$PCs_95_percent / summary_table$NumFeatures) * 100
+summary_table$Percent_PCs_99 <- (summary_table$PCs_99_percent / summary_table$NumFeatures) * 100
+summary_table$Percent_PCs_100 <- (summary_table$PCs_100_percent / summary_table$NumFeatures) * 100
+
+# Print average percentages (excluding NAs)
+cat("\nAverage percentage of features needed:\n")
+cat("For 90% variance:", mean(summary_table$Percent_PCs_90, na.rm = TRUE), "%\n")
+cat("For 95% variance:", mean(summary_table$Percent_PCs_95, na.rm = TRUE), "%\n")
+cat("For 99% variance:", mean(summary_table$Percent_PCs_99, na.rm = TRUE), "%\n")
+cat("For 100% variance:", mean(summary_table$Percent_PCs_100, na.rm = TRUE), "%\n")
+```
+
+
+
+
+Given that each session contains data from a different number of neurons, and these neurons come from varying brain areas, each session has a varying number of PCs needed to explain 90% of the total variance of their datasets. Because of this, I wanted to attempt bootstraping to standardize the number of PCs needed to explain 90% of the variance. I wanted to do this because I want to include a set number of PCs into my prediction model. However, just choosing a set number of PCs without bootstrapping beforehand would result in different amounts of variance of each session being encompassed by the prediction model. I have included the code that I tried to use to do bootstrapping, but it was not successful. If given more time, I would have tried to troubleshoot this. 
+
+
+
+
+
+Another method I thought to deal with the problem of a varying number of PCs per session is to randomly select 114 trials of each session in order to standardize the number of PCs per session. This theoretically should encompass the variability within each session as long as the sample size of 114 is large enough. 
+
+
+
+
+
+```{r}
+# Create a function to analyze a single session with random sampling
+analyze_session_pca <- function(session_data, session_id, sample_size = 114) {
+  # First check if spks has elements
+  if (length(session_data$spks) == 0) {
+    cat("Session", session_id, ": The spks list is empty\n")
+    return(list(success = FALSE, message = "The spks list is empty"))
+  } 
+  
+  # Check if any elements have length > 0
+  element_lengths <- sapply(session_data$spks, length)
+  
+  if (all(element_lengths == 0)) {
+    cat("Session", session_id, ": All elements in spks are empty\n")
+    return(list(success = FALSE, message = "All elements in spks are empty"))
+  } 
+  
+  # Check if we have enough trials for sampling
+  n_trials <- length(session_data$spks)
+  if (n_trials < sample_size) {
+    cat("Session", session_id, ": Not enough trials for sampling (", n_trials, " < ", sample_size, ")\n")
+    return(list(success = FALSE, message = paste("Not enough trials for sampling:", n_trials, "<", sample_size)))
+  }
+  
+  cat("Session", session_id, ": Found non-empty elements in spks. Continuing with matrix creation...\n")
+  
+  # Randomly sample trials
+  set.seed(42 + session_id)  # Set seed for reproducibility, different for each session
+  sampled_indices <- sample(1:n_trials, sample_size)
+  
+  cat("  Randomly sampled", sample_size, "trials from", n_trials, "total trials\n")
+  
+  # Get element lengths for sampled trials
+  sampled_element_lengths <- element_lengths[sampled_indices]
+  max_length <- max(sampled_element_lengths)
+  
+  cat("  Max length of spike vectors in sample:", max_length, "\n")
+  
+  spike_matrix <- matrix(0, nrow = sample_size, ncol = max_length)
+  
+  # Fill the matrix with spike data - more robustly
+  for (i in 1:sample_size) {
+    original_idx <- sampled_indices[i]
+    if (length(session_data$spks[[original_idx]]) > 0) {
+      spk_data <- session_data$spks[[original_idx]]
+      spike_matrix[i, 1:length(spk_data)] <- spk_data
+    }
+  }
+  
+  # Check if the matrix has any non-zero values
+  if (all(spike_matrix == 0)) {
+    cat("  Warning: Spike matrix contains only zeros\n")
+    return(list(success = FALSE, message = "Spike matrix contains only zeros"))
+  }
+  
+  # Check column variances
+  col_vars <- apply(spike_matrix, 2, var)
+  non_zero_vars <- sum(col_vars > 0)
+  
+  cat("  Columns with non-zero variance:", non_zero_vars, "out of", ncol(spike_matrix), "\n")
+  
+  if (non_zero_vars >= 2) {
+    # Keep only columns with variance
+    spike_matrix_filtered <- spike_matrix[, col_vars > 0, drop = FALSE]
+    cat("  Running PCA on filtered matrix with dimensions:", dim(spike_matrix_filtered), "\n")
+    
+    # Run PCA
+    tryCatch({
+      pca_result <- prcomp(spike_matrix_filtered, scale = TRUE)
+      
+      # Calculate variance explained
+      var_explained <- pca_result$sdev^2 / sum(pca_result$sdev^2)
+      cumulative_var <- cumsum(var_explained)
+      
+      # Number of PCs for different thresholds
+      pcs_90 <- min(which(cumulative_var >= 0.9))
+      if (is.infinite(pcs_90)) pcs_90 <- length(var_explained)
+      
+      pcs_95 <- min(which(cumulative_var >= 0.95))
+      if (is.infinite(pcs_95)) pcs_95 <- length(var_explained)
+      
+      pcs_99 <- min(which(cumulative_var >= 0.99))
+      if (is.infinite(pcs_99)) pcs_99 <- length(var_explained)
+      
+      pcs_100 <- length(var_explained)
+      
+      cat("  PCs for 90% variance:", pcs_90, "\n")
+      cat("  PCs for 95% variance:", pcs_95, "\n")
+      cat("  PCs for 99% variance:", pcs_99, "\n")
+      cat("  PCs for 100% variance:", pcs_100, "\n")
+      
+      # Extract variance explained by PC1 to PC10 (or as many as available)
+      var_pc1_10 <- numeric(10)
+      max_pcs <- min(10, length(var_explained))
+      var_pc1_10[1:max_pcs] <- var_explained[1:max_pcs] * 100  # Convert to percentage
+      
+      return(list(
+        success = TRUE,
+        session_id = session_id,
+        n_trials = sample_size,
+        original_n_trials = n_trials,
+        n_features = non_zero_vars,
+        pcs_90 = pcs_90,
+        pcs_95 = pcs_95,
+        pcs_99 = pcs_99,
+        pcs_100 = pcs_100,
+        var_explained = var_explained,
+        var_pc1_10 = var_pc1_10
+      ))
+    }, error = function(e) {
+      cat("  Error in PCA:", e$message, "\n")
+      return(list(success = FALSE, message = paste("Error in PCA:", e$message)))
+    })
+  } else {
+    cat("  Not enough columns with variance for PCA\n")
+    return(list(success = FALSE, message = "Not enough columns with variance for PCA"))
+  }
+}
+
+# Process all 18 sessions
+results <- list()
+for (i in 1:18) {
+  cat("\nAnalyzing session", i, "\n")
+  
+  # Check if session exists
+  if (exists(paste0("session", i)) || exists("session") && length(session) >= i) {
+    # Get the correct session data
+    if (exists(paste0("session", i))) {
+      session_data <- get(paste0("session", i))
+    } else {
+      session_data <- session[[i]]
+    }
+    
+    # Analyze the session with 114 sampled trials
+    result <- analyze_session_pca(session_data, i, sample_size = 114)
+    results[[as.character(i)]] <- result
+  } else {
+    cat("Session", i, "data not found\n")
+    results[[as.character(i)]] <- list(success = FALSE, message = "Session data not found")
+  }
+}
+
+# Create summary table
+summary_table <- data.frame(
+  Session = integer(),
+  NumTrials = integer(),
+  OriginalNumTrials = integer(),
+  NumFeatures = integer(),
+  PCs_90_percent = integer(),
+  PCs_95_percent = integer(),
+  PCs_99_percent = integer(),
+  PCs_100_percent = integer(),
+  # Add columns for variance explained by PC1-PC10
+  PC1_var = numeric(),
+  PC2_var = numeric(),
+  PC3_var = numeric(),
+  PC4_var = numeric(),
+  PC5_var = numeric(),
+  PC6_var = numeric(),
+  PC7_var = numeric(),
+  PC8_var = numeric(),
+  PC9_var = numeric(),
+  PC10_var = numeric()
+)
+
+for (session_id in names(results)) {
+  result <- results[[session_id]]
+  if (result$success) {
+    # Create a row with basic data
+    row_data <- data.frame(
+      Session = as.integer(session_id),
+      NumTrials = result$n_trials,
+      OriginalNumTrials = result$original_n_trials,
+      NumFeatures = result$n_features,
+      PCs_90_percent = result$pcs_90,
+      PCs_95_percent = result$pcs_95,
+      PCs_99_percent = result$pcs_99,
+      PCs_100_percent = result$pcs_100
+    )
+    
+    # Add PC1-PC10 variance explained columns
+    for (i in 1:10) {
+      pc_col_name <- paste0("PC", i, "_var")
+      row_data[[pc_col_name]] <- result$var_pc1_10[i]
+    }
+    
+    # Add to summary table
+    summary_table <- rbind(summary_table, row_data)
+  } else {
+    # Add a row with NA values for failed sessions
+    row_data <- data.frame(
+      Session = as.integer(session_id),
+      NumTrials = NA,
+      OriginalNumTrials = NA,
+      NumFeatures = NA,
+      PCs_90_percent = NA,
+      PCs_95_percent = NA,
+      PCs_99_percent = NA,
+      PCs_100_percent = NA
+    )
+    
+    # Add NA for PC1-PC10 variance columns
+    for (i in 1:10) {
+      pc_col_name <- paste0("PC", i, "_var")
+      row_data[[pc_col_name]] <- NA
+    }
+    
+    # Add to summary table
+    summary_table <- rbind(summary_table, row_data)
+  }
+}
+
+# Sort by session and print
+summary_table <- summary_table[order(summary_table$Session), ]
+print(summary_table)
+
+# Calculate percentage of features needed
+summary_table$Percent_PCs_90 <- (summary_table$PCs_90_percent / summary_table$NumFeatures) * 100
+summary_table$Percent_PCs_95 <- (summary_table$PCs_95_percent / summary_table$NumFeatures) * 100
+summary_table$Percent_PCs_99 <- (summary_table$PCs_99_percent / summary_table$NumFeatures) * 100
+summary_table$Percent_PCs_100 <- (summary_table$PCs_100_percent / summary_table$NumFeatures) * 100
+
+# Print average percentages (excluding NAs)
+cat("\nAverage percentage of features needed:\n")
+cat("For 90% variance:", mean(summary_table$Percent_PCs_90, na.rm = TRUE), "%\n")
+cat("For 95% variance:", mean(summary_table$Percent_PCs_95, na.rm = TRUE), "%\n")
+cat("For 99% variance:", mean(summary_table$Percent_PCs_99, na.rm = TRUE), "%\n")
+cat("For 100% variance:", mean(summary_table$Percent_PCs_100, na.rm = TRUE), "%\n")
+
+# Calculate consistency across sessions
+cat("\nConsistent PC counts across sessions:\n")
+cat("For 90% variance:", max(summary_table$PCs_90_percent, na.rm = TRUE), "\n")
+cat("For 95% variance:", max(summary_table$PCs_95_percent, na.rm = TRUE), "\n")
+cat("For 99% variance:", max(summary_table$PCs_99_percent, na.rm = TRUE), "\n")
+cat("For 100% variance:", max(summary_table$PCs_100_percent, na.rm = TRUE), "\n")
+
+# Calculate average variance explained by each PC
+cat("\nAverage variance explained by each PC:\n")
+for (i in 1:10) {
+  pc_col_name <- paste0("PC", i, "_var")
+  avg_var <- mean(summary_table[[pc_col_name]], na.rm = TRUE)
+  cat(paste0("PC", i, ": ", round(avg_var, 2), "%\n"))
+}
+
+# Create a more readable table with just PC variance information
+pc_variance_table <- summary_table[, c("Session", paste0("PC", 1:10, "_var"))]
+
+# Print this table
+cat("\nVariance explained by PC1-PC10 for each session:\n")
+print(pc_variance_table)
+```
+
+
+
+
+
+
+
+
+
+
+I will now progress with my prediction model by using 114 PCs. I am now adding the PCs into the overall dataframe I am using for prediction.  
+
+
+
+```{r}
+# After running your PCA analysis and generating the 'results' list
+# This code will append PC values to results_df_allsessions
+
+# First, let's see how many PCs we need to extract from each session
+max_pcs <- 114  # Number of PC columns to create
+
+# Create a function to extract PC scores from a session's PCA result
+extract_pc_scores <- function(session_id, pca_result, max_pcs) {
+  # Check if the PCA was successful
+  if (!pca_result$success) {
+    return(NULL)
+  }
+  
+  # Get the original spike matrix and apply PCA transformation
+  session_data <- if (exists(paste0("session", session_id))) {
+    get(paste0("session", session_id))
+  } else {
+    session[[session_id]]
+  }
+  
+  # Get the sampled indices used for PCA
+  set.seed(42 + session_id)  # Same seed used in the analysis
+  n_trials <- length(session_data$spks)
+  sampled_indices <- sample(1:n_trials, min(114, n_trials))
+  
+  # Recreate the spike matrix
+  element_lengths <- sapply(session_data$spks, length)
+  sampled_element_lengths <- element_lengths[sampled_indices]
+  max_length <- max(sampled_element_lengths)
+  
+  spike_matrix <- matrix(0, nrow = length(sampled_indices), ncol = max_length)
+  for (i in 1:length(sampled_indices)) {
+    original_idx <- sampled_indices[i]
+    if (length(session_data$spks[[original_idx]]) > 0) {
+      spk_data <- session_data$spks[[original_idx]]
+      spike_matrix[i, 1:length(spk_data)] <- spk_data
+    }
+  }
+  
+  # Filter columns with zero variance
+  col_vars <- apply(spike_matrix, 2, var)
+  spike_matrix_filtered <- spike_matrix[, col_vars > 0, drop = FALSE]
+  
+  # Apply PCA transformation
+  pca_obj <- prcomp(spike_matrix_filtered, scale = TRUE)
+  pc_scores <- pca_obj$x
+  
+  # Create a data frame with PC scores
+  pc_df <- as.data.frame(pc_scores)
+  
+  # If we have fewer PCs than max_pcs, fill the rest with NA
+  if (ncol(pc_df) < max_pcs) {
+    for (i in (ncol(pc_df) + 1):max_pcs) {
+      pc_df[[paste0("PC", i)]] <- NA
+    }
+  }
+  
+  # Limit to max_pcs columns
+  pc_df <- pc_df[, 1:max_pcs]
+  
+  # Add session identifier
+  pc_df$session_id <- session_id
+  
+  # Add trial identifier - these match the original trial indices
+  pc_df$trial_idx <- sampled_indices
+  
+  return(pc_df)
+}
+
+# Extract PC scores for each session
+pc_scores_list <- list()
+for (i in 1:18) {
+  if (names(results)[i] == as.character(i) && results[[i]]$success) {
+    pc_scores <- extract_pc_scores(i, results[[i]], max_pcs)
+    if (!is.null(pc_scores)) {
+      pc_scores_list[[as.character(i)]] <- pc_scores
+    }
+  }
+}
+
+# Combine all PC scores
+all_pc_scores <- do.call(rbind, pc_scores_list)
+
+# Check if results_df_allsessions exists and create it if not
+if (!exists("results_df_allsessions")) {
+  results_df_allsessions <- data.frame()
+}
+
+# Prepare results_df_allsessions by adding any necessary identifiers if it's empty
+if (nrow(results_df_allsessions) == 0) {
+  # Create a basic structure
+  results_df_allsessions <- data.frame(
+    session = integer(),
+    trial = integer()
+  )
+}
+
+# Now merge the PC scores with results_df_allsessions
+# First make sure column names in all_pc_scores are distinct
+colnames(all_pc_scores)[1:max_pcs] <- paste0("PC", 1:max_pcs, "_score")
+
+# Rename session_id and trial_idx for merging
+colnames(all_pc_scores)[colnames(all_pc_scores) == "session_id"] <- "session"
+colnames(all_pc_scores)[colnames(all_pc_scores) == "trial_idx"] <- "trial"
+
+# Join PC scores with results_df_allsessions
+# If results_df_allsessions already has data:
+if (nrow(results_df_allsessions) > 0) {
+  # Check if columns already exist and remove them if necessary
+  existing_pc_cols <- grep("PC[0-9]+_score", colnames(results_df_allsessions))
+  if (length(existing_pc_cols) > 0) {
+    results_df_allsessions <- results_df_allsessions[, -existing_pc_cols]
+  }
+  
+  # Merge based on session and trial
+  results_df_allsessions <- merge(results_df_allsessions, all_pc_scores, 
+                                 by = c("session", "trial"), 
+                                 all.x = TRUE)
+} else {
+  # If results_df_allsessions is empty, just use the PC scores
+  results_df_allsessions <- all_pc_scores
+}
+
+# Check the updated dataset
+cat("Dataset dimensions:", dim(results_df_allsessions), "\n")
+cat("First few column names:", head(colnames(results_df_allsessions)), "...\n")
+```
+
+
+
+This is a new dataset that includes PC data. 
+
+```{r}
+results_df_allsessions
+```
+
+
+
+```{r, eval=FALSE}
+# If feedback is continuous rather than categorical
+ggplot(results_df_allsessions, aes(x = PC1_score, y = PC2_score, color = feedback)) +
+  geom_point(alpha = 0.2) +
+  #scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(title = "PC1 vs PC2 Colored by Feedback",
+       x = "PC1 Score",
+       y = "PC2 Score") +
+  theme_minimal() + facet_wrap(~session)
+```
+
+
+
+
+I now want to see how these PCs may correlate with feedback score. I want to see if some PCs have a higher correlation with feedback than others. If some PCs have no correlation with feedback score, then we can ignore them from the prediction model. 
+
+
+
+```{r, eval=FALSE}
+# Assuming you have results_df_allsessions with PC scores and feedback variable
+
+# 1. Calculate correlation between each PC and feedback
+pc_feedback_correlation <- data.frame(
+  PC = character(),
+  Correlation = numeric(),
+  P_Value = numeric()
+)
+
+# Check that feedback is numeric
+if (!is.numeric(results_df_allsessions$feedback)) {
+  results_df_allsessions$feedback_numeric <- as.numeric(as.character(results_df_allsessions$feedback))
+} else {
+  results_df_allsessions$feedback_numeric <- results_df_allsessions$feedback
+}
+
+# Calculate correlation for first 20 PCs (or however many you have)
+max_pcs <- 20  # Adjust based on your data
+for (i in 1:max_pcs) {
+  pc_col <- paste0("PC", i, "_score")
+  
+  # Skip if this PC column doesn't exist
+  if (!pc_col %in% colnames(results_df_allsessions)) next
+  
+  # Calculate correlation
+  cor_test <- cor.test(results_df_allsessions[[pc_col]], 
+                      results_df_allsessions$feedback_numeric,
+                      use = "pairwise.complete.obs")
+  
+  # Add to results
+  pc_feedback_correlation <- rbind(pc_feedback_correlation, data.frame(
+    PC = paste0("PC", i),
+    Correlation = cor_test$estimate,
+    P_Value = cor_test$p.value
+  ))
+}
+
+# Add significance indicator
+pc_feedback_correlation$Significant <- pc_feedback_correlation$P_Value < 0.05
+
+# Sort by absolute correlation strength
+pc_feedback_correlation$Abs_Correlation <- abs(pc_feedback_correlation$Correlation)
+pc_feedback_correlation <- pc_feedback_correlation[order(pc_feedback_correlation$Abs_Correlation, decreasing = TRUE), ]
+
+# Print top PCs by correlation with feedback
+print(pc_feedback_correlation)
+
+# 2. Visualize correlations
+library(ggplot2)
+
+# Bar plot of correlations
+ggplot(pc_feedback_correlation, aes(x = reorder(PC, Abs_Correlation), y = Correlation, fill = Significant)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = c("FALSE" = "gray", "TRUE" = "blue")) +
+  labs(title = "Correlation Between Principal Components and Feedback",
+       subtitle = "Sorted by correlation strength",
+       x = "Principal Component",
+       y = "Correlation with Feedback") +
+  theme_minimal()
+
+# 3. Create model to predict feedback from PCs
+pc_columns <- paste0("PC", 1:max_pcs, "_score")
+pc_columns <- pc_columns[pc_columns %in% colnames(results_df_allsessions)]
+
+# First check what values are in your feedback variable
+print("Feedback variable values:")
+print(table(results_df_allsessions$feedback_numeric))
+
+# Transform the feedback variable for logistic regression if needed
+# Check if feedback is already 0/1
+if (!all(results_df_allsessions$feedback_numeric %in% c(0, 1, NA))) {
+  # If feedback is -1/1
+  if (all(na.omit(results_df_allsessions$feedback_numeric) %in% c(-1, 1))) {
+    results_df_allsessions$feedback_binary <- ifelse(results_df_allsessions$feedback_numeric == 1, 1, 0)
+    cat("Transformed feedback from -1/1 to 0/1 for logistic regression\n")
+  } else {
+    # For other values, use a threshold approach
+    results_df_allsessions$feedback_binary <- ifelse(results_df_allsessions$feedback_numeric > mean(results_df_allsessions$feedback_numeric, na.rm = TRUE), 1, 0)
+    cat("Transformed feedback using mean threshold for logistic regression\n")
+  }
+} else {
+  # Already binary
+  results_df_allsessions$feedback_binary <- results_df_allsessions$feedback_numeric
+  cat("Feedback already in 0/1 format\n")
+}
+
+# Create formula for logistic regression
+formula_str <- paste("feedback_binary ~", paste(pc_columns, collapse = " + "))
+formula_obj <- as.formula(formula_str)
+
+# Try fitting logistic model
+tryCatch({
+  logistic_model <- glm(formula_obj, data = results_df_allsessions, family = "binomial")
+  
+  # Get summary
+  model_summary <- summary(logistic_model)
+  
+  # Extract coefficients and p-values
+  coef_data <- data.frame(
+    PC = names(coef(logistic_model))[-1],  # Remove intercept
+    Coefficient = coef(logistic_model)[-1],
+    P_Value = model_summary$coefficients[-1, "Pr(>|z|)"]
+  )
+  
+  # Sort by absolute coefficient size
+  coef_data$Abs_Coefficient <- abs(coef_data$Coefficient)
+  coef_data <- coef_data[order(coef_data$Abs_Coefficient, decreasing = TRUE), ]
+  coef_data$Significant <- coef_data$P_Value < 0.05
+  
+  # Print top PCs by model coefficient
+  cat("\nTop PCs by logistic regression coefficient:\n")
+  print(coef_data)
+}, error = function(e) {
+  cat("Error in logistic regression:", e$message, "\n")
+  cat("Falling back to linear model instead\n")
+  
+  # Use linear model instead
+  linear_model <- lm(paste("feedback_numeric ~", paste(pc_columns, collapse = " + ")), 
+                    data = results_df_allsessions)
+  
+  # Get summary
+  model_summary <- summary(linear_model)
+  
+  # Extract coefficients and p-values
+  coef_data <- data.frame(
+    PC = names(coef(linear_model))[-1],  # Remove intercept
+    Coefficient = coef(linear_model)[-1],
+    P_Value = model_summary$coefficients[-1, "Pr(>|t|)"]
+  )
+  
+  # Sort by absolute coefficient size
+  coef_data$Abs_Coefficient <- abs(coef_data$Coefficient)
+  coef_data <- coef_data[order(coef_data$Abs_Coefficient, decreasing = TRUE), ]
+  coef_data$Significant <- coef_data$P_Value < 0.05
+  
+  # Print top PCs by model coefficient
+  cat("\nTop PCs by linear model coefficient:\n")
+  print(coef_data)
+})
+
+# 4. Visualize most important PCs (those with strongest correlation) against feedback
+# Get top 4 PCs based on correlation
+top_pcs <- pc_feedback_correlation$PC[1:min(4, nrow(pc_feedback_correlation))]
+top_pc_cols <- paste0(top_pcs, "_score")
+
+# Create scatter plots
+for (pc_col in top_pc_cols) {
+  p <- ggplot(results_df_allsessions, aes_string(x = pc_col, y = "feedback_numeric", color = "factor(feedback_numeric)")) +
+    geom_jitter(width = 0, height = 0.05, alpha = 0.5) +
+    # Using method = "lm" for linear fit that works with any feedback values
+    geom_smooth(method = "lm", se = TRUE, color = "black") +
+    labs(title = paste(pc_col, "vs Feedback"),
+         subtitle = paste("Correlation:", 
+                        round(pc_feedback_correlation$Correlation[pc_feedback_correlation$PC == gsub("_score", "", pc_col)], 3),
+                        ", p-value:", 
+                        round(pc_feedback_correlation$P_Value[pc_feedback_correlation$PC == gsub("_score", "", pc_col)], 4)),
+         x = pc_col,
+         y = "Feedback") +
+    theme_minimal()
+  
+  print(p)
+}
+
+# 5. Compare variance explained vs correlation with feedback
+pc_variance <- data.frame(
+  PC = paste0("PC", 1:max_pcs),
+  Variance_Explained = NA
+)
+
+# Add variance explained (from your summary_table if available)
+for (i in 1:max_pcs) {
+  pc_col <- paste0("PC", i, "_var")
+  if (exists("summary_table") && pc_col %in% colnames(summary_table)) {
+    pc_variance$Variance_Explained[i] <- mean(summary_table[[pc_col]], na.rm = TRUE)
+  }
+}
+
+# Merge variance and correlation data
+pc_comparison <- merge(pc_variance, pc_feedback_correlation, by = "PC", all = TRUE)
+
+# Only include rows with both variance and correlation data
+pc_comparison <- pc_comparison[!is.na(pc_comparison$Variance_Explained) & 
+                             !is.na(pc_comparison$Correlation), ]
+
+if (nrow(pc_comparison) > 0) {
+  # Plot variance explained vs correlation strength
+  ggplot(pc_comparison, aes(x = Variance_Explained, y = Abs_Correlation, color = Significant)) +
+    geom_point(size = 3) +
+    geom_text(aes(label = PC), vjust = -0.5, hjust = 0.5) +
+    scale_color_manual(values = c("FALSE" = "gray", "TRUE" = "blue")) +
+    labs(title = "PC Variance Explained vs Correlation with Feedback",
+         x = "Variance Explained (%)",
+         y = "Absolute Correlation with Feedback") +
+    theme_minimal()
+} else {
+  cat("Not enough data to compare variance explained vs correlation\n")
+}
+
+# 6. Select the most behaviorally relevant PCs
+# Combine results from correlation and regression
+if (exists("coef_data")) {
+  # Get top 5 PCs from correlation
+  top_corr_pcs <- pc_feedback_correlation$PC[1:min(5, nrow(pc_feedback_correlation))]
+  
+  # Get top 5 PCs from regression model
+  top_reg_pcs <- coef_data$PC[1:min(5, nrow(coef_data))]
+  
+  # Find PCs that appear in both lists
+  common_pcs <- intersect(top_corr_pcs, top_reg_pcs)
+  
+  cat("\nMost behaviorally relevant PCs based on both correlation and regression:\n")
+  print(common_pcs)
+  
+  cat("\nTop 5 PCs by correlation strength:\n")
+  print(top_corr_pcs)
+  
+  cat("\nTop 5 PCs by regression coefficient:\n")
+  print(top_reg_pcs)
+}
+```
+
+
+```{r}
+# Calculate correlation between each PC and feedback for all 114 PCs
+pc_feedback_correlation <- data.frame(
+  PC = character(),
+  Correlation = numeric(),
+  P_Value = numeric()
+)
+
+# First, check if feedback is numeric and create feedback_numeric if needed
+if (!exists("results_df_allsessions$feedback_numeric")) {
+  # Create feedback_numeric from feedback
+  if (is.factor(results_df_allsessions$feedback) || is.character(results_df_allsessions$feedback)) {
+    results_df_allsessions$feedback_numeric <- as.numeric(as.character(results_df_allsessions$feedback))
+  } else {
+    results_df_allsessions$feedback_numeric <- as.numeric(results_df_allsessions$feedback)
+  }
+  
+  # Check if conversion was successful
+  if (any(is.na(results_df_allsessions$feedback_numeric)) && !any(is.na(results_df_allsessions$feedback))) {
+    # If NAs were introduced, there was a conversion problem
+    cat("Warning: Could not convert some feedback values to numeric\n")
+  }
+}
+
+# Print info about the feedback variable
+cat("Feedback variable type:", class(results_df_allsessions$feedback), "\n")
+cat("Feedback_numeric variable type:", class(results_df_allsessions$feedback_numeric), "\n")
+cat("First few values:", head(results_df_allsessions$feedback_numeric), "\n")
+
+# Set max_pcs to 114 to analyze all PCs
+max_pcs <- 114  
+
+# Loop through all PCs
+for (i in 1:max_pcs) {
+  pc_col <- paste0("PC", i, "_score")
+  
+  # Skip if this PC column doesn't exist
+  if (!pc_col %in% colnames(results_df_allsessions)) next
+  
+  # Calculate correlation
+  cor_test <- cor.test(results_df_allsessions[[pc_col]], 
+                      results_df_allsessions$feedback_numeric,
+                      use = "pairwise.complete.obs")
+  
+  # Add to results
+  pc_feedback_correlation <- rbind(pc_feedback_correlation, data.frame(
+    PC = paste0("PC", i),
+    Correlation = cor_test$estimate,
+    P_Value = cor_test$p.value
+  ))
+}
+
+# Add significance indicator
+pc_feedback_correlation$Significant <- pc_feedback_correlation$P_Value < 0.05
+
+# Sort by absolute correlation strength
+pc_feedback_correlation$Abs_Correlation <- abs(pc_feedback_correlation$Correlation)
+pc_feedback_correlation <- pc_feedback_correlation[order(pc_feedback_correlation$Abs_Correlation, decreasing = TRUE), ]
+
+# Print all rows with no row limit
+print(pc_feedback_correlation, n = nrow(pc_feedback_correlation))
+
+# Optionally save to a CSV file for easier viewing
+write.csv(pc_feedback_correlation, "pc_feedback_correlations_all.csv", row.names = FALSE)
+```
+
+This table demonstrates that some PCs have no correlation with feedback, either positively or negatively. The column "Significant" was determined by comparing the P-value of a Pearson Correlation Test to a cutoff value of 0.05. If the p-value of the correlation test was above 0.05, then it was concluded to have no significant correlation with feedback score, and thus does not need to be in our prediction model. 
+
+
+I will now alter the dataframe I will be using for prediction to only have columns for PCs that have a signficant correlation with feedback, as I will only use these in my prediction model. There is no use to include PCs that have no ability to predict feedback score. 
+
+```{r}
+# Assuming pc_feedback_correlation has your correlation results
+# Get the names of PCs that are significantly correlated with feedback
+significant_pcs <- pc_feedback_correlation$PC[pc_feedback_correlation$Significant == TRUE]
+
+# Convert PC names to column names in your dataframe (adding "_score" suffix)
+significant_pc_cols <- paste0(significant_pcs, "_score")
+
+# Get names of all columns that aren't PC score columns
+non_pc_cols <- colnames(results_df_allsessions)[!grepl("PC\\d+_score", colnames(results_df_allsessions))]
+
+# Create a vector of columns to keep (non-PC columns plus significant PC columns)
+cols_to_keep <- c(non_pc_cols, significant_pc_cols)
+
+# Subset the dataframe to keep only those columns
+results_df_allsessions_significant <- results_df_allsessions[, cols_to_keep]
+
+# Check the dimensions of the new dataframe
+cat("Original dataframe dimensions:", dim(results_df_allsessions), "\n")
+cat("New dataframe with only significant PCs:", dim(results_df_allsessions_significant), "\n")
+cat("Number of significant PCs:", length(significant_pcs), "\n")
+
+# Preview the column names of the new dataframe
+cat("\nFirst few columns of the new dataframe:\n")
+print(head(colnames(results_df_allsessions_significant)))
+```
+
+```{r}
+results_df_allsessions_significant
+```
+
+
+
+
+
+
+
+I also realized that the contrastdiff variable I made did not distinguish between a combination of right contrast = 1 and left contrast = 0.5, versus another trial where right contrast = 0.5 and left contrast = 0. I wanted to make this distinction by using an interaction variable instead. I then conducted a chi-square test to see whether this new interaction variable of right_contrast x left_contrast had a significant correlation with feedback score. The result of the test demonstrated that there is a strong relationship between the interaction term and the feedback score (p value very low), so I will continue to use this interaction term instead of the contrast_diff variable in my prediction model. 
+
+
+```{r}
+# Method 1: Using paste() to create the interaction manually
+results_df_allsessions_significant$contrast_interaction <- paste(
+  results_df_allsessions_significant$leftcontrast,
+  results_df_allsessions_significant$rightcontrast,
+  sep = "_"
+)
+
+# Method 2: If you want to use the interaction() function with error checking
+# First check for NA values
+na_count <- sum(is.na(results_df_allsessions_significant$leftcontrast) | 
+                is.na(results_df_allsessions_significant$rightcontrast))
+cat("Number of NA values in contrast variables:", na_count, "\n")
+
+# Try a different approach if there are NA values
+if (na_count > 0) {
+  # Handle NA values by creating factors with NA as a level
+  results_df_allsessions_significant$leftcontrast_factor <- factor(results_df_allsessions_significant$leftcontrast, 
+                                                     exclude = NULL)
+  results_df_allsessions_significant$rightcontrast_factor <- factor(results_df_allsessions_significant$rightcontrast, 
+                                                      exclude = NULL)
+} else {
+  # Regular factor conversion if no NAs
+  results_df_allsessions_significant$leftcontrast_factor <- factor(results_df_allsessions_significant$leftcontrast)
+  results_df_allsessions_significant$rightcontrast_factor <- factor(results_df_allsessions_significant$rightcontrast)
+}
+
+# Now try the interaction
+results_df_allsessions_significant$contrast_interaction <- as.character(
+  interaction(results_df_allsessions_significant$rightcontrast_factor,
+              results_df_allsessions_significant$leftcontrast_factor,
+              sep = "_", drop = TRUE)
+)
+
+# Check if it worked
+head(results_df_allsessions_significant[, c("leftcontrast", "rightcontrast", "contrast_interaction")])
+```
+
+
+```{r}
+# Create a contingency table
+contingency_table <- table(results_df_allsessions_significant$contrast_interaction, 
+                           results_df_allsessions_significant$feedback)
+
+# View the contingency table
+print(contingency_table)
+
+# Perform chi-square test
+chi_square_result <- chisq.test(contingency_table)
+
+# Print the results
+print(chi_square_result)
+```
+
+```{r}
+# Calculate proportion of positive feedback for each contrast combination
+prop_table <- prop.table(contingency_table, 1)
+prop_df <- as.data.frame(prop_table)
+names(prop_df) <- c("Contrast", "Feedback", "Proportion")
+
+# Create bar plot
+ggplot(prop_df, aes(x = Contrast, y = Proportion, fill = Feedback)) +
+  geom_bar(stat = "identity", position = "stack") +
+  coord_flip() +
+  scale_fill_manual(values = c("-1" = "red", "1" = "blue")) +
+  labs(title = "Proportion of Feedback by Contrast Combination",
+       y = "Proportion",
+       x = "Contrast Combination (Right-Left)") +
+  theme_minimal()
+```
+
+
+
+
+
+
+
+
+I have finished by EDA and data integration. From my analyses, I found that variables that correlate with feedback score are: avg_spike_count, contrast_interaction, and the PCs of the raw spike data that were deemed significantly correlated with feedback score. 
+
+
+
+Now, I am going to create testing and training datasets to train my prediction model. I want to remove trials where both left and right contrast are equal, because these trials have a randomly assigned success or failure. This will then skew my prediction model, so I choose to remove it before doing prediction at all. 
+
+```{r}
+# Identify rows where either:
+# 1. Right contrast != left contrast, OR
+# 2. Right contrast == left contrast == 0
+rows_to_keep <- (results_df_allsessions_significant$rightcontrast != results_df_allsessions_significant$leftcontrast) | 
+                (results_df_allsessions_significant$rightcontrast == 0 & results_df_allsessions_significant$leftcontrast == 0)
+
+# Create new dataframe without the matching non-zero contrast trials
+results_df_allsessions_significant_filtered <- results_df_allsessions_significant[rows_to_keep, ]
+
+```
+
+
+To make my training and testing datasets, I will break my data into fourths, each of which will be a testing set while the rest are part of the training set. To remove any type of biases, I am going to randomly sample from the total number of trials across all sessions to create these sets. 
+
+Another thing I want to do is to have an equal number of success and failure trials within each of the training sets. I do not want the model to predict more successes incorrectly because its training dataset was skewed towards successes. 
+
+
+I thought about bootstrapping the data in order to have an equal distribution of feedback scores within each training set while still using all of the trials available to us. However, given the imbalance in amount between feedback = 1 (72% of total data) versus feedback = -1 (28% of total data), the bootstrapping method would need to create a large number of resampled new trials. I did not want to build a prediction model with so many "fake" trials, so I decided not to follow through with this bootstrapping plan. 
+
+
+```{r}
+library(dplyr)
+library(caret)
+
+# First, check the feedback distribution
+feedback_distribution <- table(results_df_allsessions_significant_filtered$feedback)
+print("Overall feedback distribution:")
+print(feedback_distribution)
+
+# Create a stratified 4-fold split
+set.seed(123) # For reproducibility
+folds <- createFolds(results_df_allsessions_significant_filtered$feedback, 
+                     k = 4, 
+                     list = TRUE, 
+                     returnTrain = FALSE)
+
+# Create 4 pairs of training/testing datasets
+train_test_pairs <- list()
+
+for (i in 1:4) {
+  # Get test indices for this fold
+  test_indices <- folds[[i]]
+  
+  # Get train indices (all rows except test_indices)
+  train_indices <- setdiff(1:nrow(results_df_allsessions_significant_filtered), test_indices)
+  
+  # Create test dataset
+  test_data <- results_df_allsessions_significant_filtered[test_indices, ]
+  
+  # Create train dataset
+  train_data <- results_df_allsessions_significant_filtered[train_indices, ]
+  
+  # Store in list
+  train_test_pairs[[i]] <- list(
+    train = train_data,
+    test = test_data
+  )
+  
+  # Print fold information
+  cat("\nFold", i, "summary:\n")
+  cat("Training set size:", nrow(train_data), 
+      "(", round(nrow(train_data) / nrow(results_df_allsessions_significant_filtered) * 100, 1), "%)\n")
+  cat("Testing set size:", nrow(test_data), 
+      "(", round(nrow(test_data) / nrow(results_df_allsessions_significant_filtered) * 100, 1), "%)\n")
+  
+  # Check feedback balance
+  train_feedback <- table(train_data$feedback)
+  test_feedback <- table(test_data$feedback)
+  
+  cat("Training feedback distribution:", 
+      paste0(names(train_feedback), "=", train_feedback, 
+             " (", round(100 * train_feedback / sum(train_feedback), 1), "%)"), 
+      "\n")
+  cat("Testing feedback distribution:", 
+      paste0(names(test_feedback), "=", test_feedback, 
+             " (", round(100 * test_feedback / sum(test_feedback), 1), "%)"), 
+      "\n")
+}
+
+# Save the specific train/test datasets you may need
+# For example, to use fold 1:
+train_data <- train_test_pairs[[1]]$train
+test_data <- train_test_pairs[[1]]$test
+
+# You can access other folds similarly:
+# train_data_2 <- train_test_pairs[[2]]$train
+# test_data_2 <- train_test_pairs[[2]]$test
+```
+
+
+
+
+
+
+
+Now, I am using my testing and training sets to evaluate the performance of a logistic regression model:
+
+```{r}
+library(pROC)
+
+# Function to build and evaluate the model for a single fold
+evaluate_fold <- function(train_data, test_data, fold_number) {
+  # Ensure feedback is correctly handled as a factor
+  train_data$feedback <- factor(train_data$feedback, levels = c(-1, 1))
+  test_data$feedback <- factor(test_data$feedback, levels = c(-1, 1))
+  
+  # Print unique feedback values to confirm
+  cat("Unique feedback values in training data:", levels(train_data$feedback), "\n")
+  cat("Unique feedback values in test data:", levels(test_data$feedback), "\n")
+  
+  # Calculate class weights
+  neg_weight <- nrow(train_data) / (2 * sum(train_data$feedback == "-1"))
+  pos_weight <- nrow(train_data) / (2 * sum(train_data$feedback == "1"))
+  class_weights <- c(neg_weight, pos_weight)
+  names(class_weights) <- c("-1", "1")
+  
+  cat("\nFold", fold_number, "class weights:", 
+      paste(names(class_weights), "=", round(class_weights, 2)), "\n")
+  
+  # Identify PC columns
+  pc_cols <- grep("^PC\\d+_score$", colnames(train_data), value = TRUE)
+  
+  # Create formula with required variables
+  # Include avg_spike_count, contrastdiff, and all PC columns
+  formula_vars <- c("avg_spike_count", "contrastdiff", pc_cols)
+  formula_str <- paste("feedback ~", paste(formula_vars, collapse = " + "))
+  model_formula <- as.formula(formula_str)
+  
+  # Train logistic regression model with class weights
+  logistic_model <- glm(model_formula, 
+                        data = train_data, 
+                        family = binomial(),
+                        weights = ifelse(train_data$feedback == "-1", 
+                                       class_weights["-1"], 
+                                       class_weights["1"]))
+  
+  # Make predictions on test data
+  test_predictions_prob <- predict(logistic_model, 
+                                  newdata = test_data, 
+                                  type = "response")
+  test_predictions <- ifelse(test_predictions_prob > 0.5, "1", "-1")
+  test_predictions <- factor(test_predictions, levels = c("-1", "1"))
+  
+  # Add diagnostic information about the predictions
+  cat("Number of NA in predictions:", sum(is.na(test_predictions)), "\n")
+  cat("Number of NA in actual feedback:", sum(is.na(test_data$feedback)), "\n")
+  cat("Number of predictions:", length(test_predictions), "\n")
+  cat("Number of test cases:", nrow(test_data), "\n")
+  
+  # First few predictions and actual values for checking
+  cat("First 10 predictions:", as.character(head(test_predictions, 10)), "\n")
+  cat("First 10 actual values:", as.character(head(test_data$feedback, 10)), "\n")
+  
+  # Calculate accuracy with na.rm=TRUE
+  accuracy <- mean(test_predictions == test_data$feedback, na.rm = TRUE)
+  
+  # Create confusion matrix
+  conf_matrix <- table(Predicted = test_predictions, Actual = test_data$feedback)
+  
+  # Calculate other metrics
+  # Add error handling for edge cases
+  precision <- tryCatch({
+    conf_matrix["1","1"] / sum(conf_matrix["1",])
+  }, error = function(e) NA)
+  
+  recall <- tryCatch({
+    conf_matrix["1","1"] / sum(conf_matrix[,"1"])
+  }, error = function(e) NA)
+  
+  f1_score <- tryCatch({
+    2 * precision * recall / (precision + recall)
+  }, error = function(e) NA)
+  
+  # Calculate AUC - convert feedback to numeric for ROC
+  test_feedback_numeric <- as.numeric(test_data$feedback == "1")
+  roc_obj <- tryCatch({
+    roc(test_feedback_numeric, test_predictions_prob)
+  }, error = function(e) NULL)
+  
+  auc_value <- if(!is.null(roc_obj)) auc(roc_obj) else NA
+  
+  # Return all metrics
+  return(list(
+    fold = fold_number,
+    model = logistic_model,
+    accuracy = accuracy,
+    conf_matrix = conf_matrix,
+    precision = precision,
+    recall = recall,
+    f1_score = f1_score,
+    auc = auc_value,
+    roc = roc_obj
+  ))
+}
+
+# Run evaluation for all folds
+results <- list()
+for (i in 1:4) {
+  cat("\n======== Evaluating Fold", i, "========\n")
+  train_data <- train_test_pairs[[i]]$train
+  test_data <- train_test_pairs[[i]]$test
+  results[[i]] <- evaluate_fold(train_data, test_data, i)
+  
+  # Print metrics for this fold
+  cat("Fold", i, "metrics:\n")
+  cat("Accuracy:", round(results[[i]]$accuracy * 100, 2), "%\n")
+  cat("Confusion Matrix:\n")
+  print(results[[i]]$conf_matrix)
+  cat("Precision:", round(results[[i]]$precision, 3), "\n")
+  cat("Recall:", round(results[[i]]$recall, 3), "\n")
+  cat("F1 Score:", round(results[[i]]$f1_score, 3), "\n")
+  cat("AUC:", round(results[[i]]$auc, 3), "\n\n")
+}
+
+# Calculate average metrics across all folds
+avg_accuracy <- mean(sapply(results, function(x) x$accuracy), na.rm = TRUE)
+avg_precision <- mean(sapply(results, function(x) x$precision), na.rm = TRUE)
+avg_recall <- mean(sapply(results, function(x) x$recall), na.rm = TRUE)
+avg_f1 <- mean(sapply(results, function(x) x$f1_score), na.rm = TRUE)
+avg_auc <- mean(sapply(results, function(x) x$auc), na.rm = TRUE)
+
+cat("\n======== CROSS-VALIDATION SUMMARY ========\n")
+cat("Average Accuracy:", round(avg_accuracy * 100, 2), "%\n")
+cat("Average Precision:", round(avg_precision, 3), "\n")
+cat("Average Recall:", round(avg_recall, 3), "\n")
+cat("Average F1 Score:", round(avg_f1, 3), "\n")
+cat("Average AUC:", round(avg_auc, 3), "\n")
+
+# Check which variables are most important across all folds
+combined_coefficients <- data.frame()
+
+for (i in 1:4) {
+  tryCatch({
+    coef_table <- summary(results[[i]]$model)$coefficients
+    coef_df <- as.data.frame(coef_table)
+    coef_df$Variable <- rownames(coef_table)
+    coef_df$Fold <- i
+    
+    # Rename columns without special characters
+    names(coef_df) <- gsub("`", "", names(coef_df))
+    names(coef_df) <- gsub(" ", "_", names(coef_df))
+    
+    combined_coefficients <- rbind(combined_coefficients, coef_df)
+  }, error = function(e) {
+    cat("Error processing coefficients for fold", i, ":", e$message, "\n")
+  })
+}
+
+# Calculate average absolute z-value for each variable
+if(nrow(combined_coefficients) > 0) {
+  # Make sure the z-value column exists and is named consistently
+  z_col_name <- grep("z_value|z.value|zvalue", names(combined_coefficients), value = TRUE)[1]
+  
+  if(!is.na(z_col_name)) {
+    # Use the correct column name in the formula
+    formula_str <- paste("abs(", z_col_name, ") ~ Variable", sep="")
+    variable_importance <- aggregate(as.formula(formula_str), data = combined_coefficients, FUN = mean)
+    
+    # Rename the column to a consistent name
+    names(variable_importance)[2] <- "Mean_Abs_Z"
+    
+    # Sort by importance
+    variable_importance <- variable_importance[order(variable_importance$Mean_Abs_Z, decreasing = TRUE), ]
+    
+    cat("\n======== TOP 10 MOST IMPORTANT VARIABLES ========\n")
+    print(head(variable_importance, 10))
+  } else {
+    cat("Could not find z-value column in coefficient table\n")
+  }
+} else {
+  cat("No coefficient data available\n")
+}
+```
+
+
+
+
+
+```{r}
+# Function to evaluate model performance at different thresholds
+evaluate_thresholds <- function(model, test_data, thresholds = seq(0.1, 0.9, by = 0.1)) {
+  # Get prediction probabilities
+  test_predictions_prob <- predict(model, newdata = test_data, type = "response")
+  
+  # Convert test feedback to factor if it's not already
+  test_data$feedback <- factor(test_data$feedback, levels = c(-1, 1))
+  
+  # Create results dataframe
+  results <- data.frame(
+    Threshold = numeric(),
+    Accuracy = numeric(),
+    Misclassification_Rate = numeric(),
+    Precision = numeric(),
+    Recall = numeric(),
+    F1_Score = numeric(),
+    Specificity = numeric(),
+    AUC = numeric()
+  )
+  
+  # Calculate AUC once (it doesn't change with threshold)
+  test_feedback_numeric <- as.numeric(test_data$feedback == "1")
+  roc_obj <- roc(test_feedback_numeric, test_predictions_prob)
+  auc_value <- auc(roc_obj)
+  
+  # For each threshold
+  for (threshold in thresholds) {
+    # Make predictions based on current threshold
+    test_predictions <- ifelse(test_predictions_prob > threshold, "1", "-1")
+    test_predictions <- factor(test_predictions, levels = c("-1", "1"))
+    
+    # Calculate metrics
+    conf_matrix <- table(Predicted = test_predictions, Actual = test_data$feedback)
+    
+    # Handle case where some classes might be missing in predictions
+    TP <- ifelse("1" %in% rownames(conf_matrix) && "1" %in% colnames(conf_matrix), 
+                conf_matrix["1", "1"], 0)
+    FP <- ifelse("1" %in% rownames(conf_matrix) && "-1" %in% colnames(conf_matrix), 
+                conf_matrix["1", "-1"], 0)
+    TN <- ifelse("-1" %in% rownames(conf_matrix) && "-1" %in% colnames(conf_matrix), 
+                conf_matrix["-1", "-1"], 0)
+    FN <- ifelse("-1" %in% rownames(conf_matrix) && "1" %in% colnames(conf_matrix), 
+                conf_matrix["-1", "1"], 0)
+    
+    accuracy <- (TP + TN) / (TP + TN + FP + FN)
+    misclassification_rate <- 1 - accuracy
+    precision <- ifelse(TP + FP > 0, TP / (TP + FP), NA)
+    recall <- ifelse(TP + FN > 0, TP / (TP + FN), NA)
+    f1_score <- ifelse(!is.na(precision) && !is.na(recall) && precision + recall > 0, 
+                      2 * precision * recall / (precision + recall), NA)
+    specificity <- ifelse(TN + FP > 0, TN / (TN + FP), NA)
+    
+    # Add to results
+    results <- rbind(results, data.frame(
+      Threshold = threshold,
+      Accuracy = accuracy,
+      Misclassification_Rate = misclassification_rate,
+      Precision = precision,
+      Recall = recall,
+      F1_Score = f1_score,
+      Specificity = specificity,
+      AUC = auc_value
+    ))
+  }
+  
+  return(list(
+    threshold_results = results,
+    roc_curve = roc_obj
+  ))
+}
+
+# Function to evaluate threshold performance across all folds
+evaluate_all_folds <- function(results_list, thresholds = seq(0.1, 0.9, by = 0.1)) {
+  # Create a dataframe to store combined results
+  all_threshold_results <- data.frame()
+  
+  # For each fold
+  for (i in 1:length(results_list)) {
+    fold_model <- results_list[[i]]$model
+    fold_test_data <- train_test_pairs[[i]]$test
+    
+    # Evaluate thresholds for this fold
+    fold_threshold_results <- evaluate_thresholds(fold_model, fold_test_data, thresholds)
+    
+    # Add fold number to results
+    fold_threshold_results$threshold_results$Fold <- i
+    
+    # Combine with overall results
+    all_threshold_results <- rbind(all_threshold_results, fold_threshold_results$threshold_results)
+  }
+  
+  # Calculate average metrics across folds for each threshold
+  avg_threshold_results <- all_threshold_results %>%
+    group_by(Threshold) %>%
+    summarize(
+      Avg_Accuracy = mean(Accuracy, na.rm = TRUE),
+      Avg_Misclassification_Rate = mean(Misclassification_Rate, na.rm = TRUE),
+      Avg_Precision = mean(Precision, na.rm = TRUE),
+      Avg_Recall = mean(Recall, na.rm = TRUE),
+      Avg_F1_Score = mean(F1_Score, na.rm = TRUE),
+      Avg_Specificity = mean(Specificity, na.rm = TRUE),
+      Avg_AUC = mean(AUC, na.rm = TRUE)
+    )
+  
+  return(list(
+    all_results = all_threshold_results,
+    average_results = avg_threshold_results
+  ))
+}
+
+# Generate threshold evaluation results
+thresholds <- seq(0.1, 0.9, by = 0.05)  # Test thresholds from 0.1 to 0.9 in steps of 0.05
+threshold_evaluation <- evaluate_all_folds(results, thresholds)
+
+# Print results
+cat("\n======== THRESHOLD EVALUATION SUMMARY ========\n")
+print(threshold_evaluation$average_results)
+
+# Find optimal threshold based on different criteria
+max_accuracy_threshold <- threshold_evaluation$average_results[which.max(threshold_evaluation$average_results$Avg_Accuracy), ]
+max_f1_threshold <- threshold_evaluation$average_results[which.max(threshold_evaluation$average_results$Avg_F1_Score), ]
+
+cat("\nOptimal threshold for maximizing accuracy:", max_accuracy_threshold$Threshold, 
+    "(Accuracy:", round(max_accuracy_threshold$Avg_Accuracy * 100, 2), "%)\n")
+
+cat("Optimal threshold for maximizing F1 Score:", max_f1_threshold$Threshold, 
+    "(F1 Score:", round(max_f1_threshold$Avg_F1_Score, 3), ")\n")
+
+# Plot metrics vs thresholds
+library(ggplot2)
+
+# Reshape data for plotting
+plot_data <- threshold_evaluation$average_results %>%
+  tidyr::pivot_longer(
+    cols = c(Avg_Accuracy, Avg_Precision, Avg_Recall, Avg_F1_Score),
+    names_to = "Metric",
+    values_to = "Value"
+  )
+
+# Create plot
+ggplot(plot_data, aes(x = Threshold, y = Value, color = Metric)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Performance Metrics Across Different Thresholds",
+       x = "Threshold",
+       y = "Value") +
+  theme_minimal()
+```
+```{r}
+# Function to evaluate model performance at different thresholds
+evaluate_thresholds <- function(model, test_data, thresholds = seq(0.1, 0.9, by = 0.1)) {
+  # Get prediction probabilities
+  test_predictions_prob <- predict(model, newdata = test_data, type = "response")
+  
+  # Convert test feedback to factor if it's not already
+  test_data$feedback <- factor(test_data$feedback, levels = c(-1, 1))
+  
+  # Create results dataframe
+  results <- data.frame(
+    Threshold = numeric(),
+    Accuracy = numeric(),
+    Misclassification_Rate = numeric(),
+    Precision = numeric(),
+    Recall = numeric(),
+    F1_Score = numeric(),
+    Specificity = numeric(),
+    AUC = numeric()
+  )
+  
+  # Calculate AUC once (it doesn't change with threshold)
+  test_feedback_numeric <- as.numeric(test_data$feedback == "1")
+  roc_obj <- roc(test_feedback_numeric, test_predictions_prob)
+  auc_value <- auc(roc_obj)
+  
+  # For each threshold
+  for (threshold in thresholds) {
+    # Make predictions based on current threshold
+    test_predictions <- ifelse(test_predictions_prob > threshold, "1", "-1")
+    test_predictions <- factor(test_predictions, levels = c("-1", "1"))
+    
+    # Calculate metrics
+    conf_matrix <- table(Predicted = test_predictions, Actual = test_data$feedback)
+    
+    # Handle case where some classes might be missing in predictions
+    TP <- ifelse("1" %in% rownames(conf_matrix) && "1" %in% colnames(conf_matrix), 
+                conf_matrix["1", "1"], 0)
+    FP <- ifelse("1" %in% rownames(conf_matrix) && "-1" %in% colnames(conf_matrix), 
+                conf_matrix["1", "-1"], 0)
+    TN <- ifelse("-1" %in% rownames(conf_matrix) && "-1" %in% colnames(conf_matrix), 
+                conf_matrix["-1", "-1"], 0)
+    FN <- ifelse("-1" %in% rownames(conf_matrix) && "1" %in% colnames(conf_matrix), 
+                conf_matrix["-1", "1"], 0)
+    
+    accuracy <- (TP + TN) / (TP + TN + FP + FN)
+    misclassification_rate <- 1 - accuracy
+    precision <- ifelse(TP + FP > 0, TP / (TP + FP), NA)
+    recall <- ifelse(TP + FN > 0, TP / (TP + FN), NA)
+    f1_score <- ifelse(!is.na(precision) && !is.na(recall) && precision + recall > 0, 
+                      2 * precision * recall / (precision + recall), NA)
+    specificity <- ifelse(TN + FP > 0, TN / (TN + FP), NA)
+    
+    # Add to results
+    results <- rbind(results, data.frame(
+      Threshold = threshold,
+      Accuracy = accuracy,
+      Misclassification_Rate = misclassification_rate,
+      Precision = precision,
+      Recall = recall,
+      F1_Score = f1_score,
+      Specificity = specificity,
+      AUC = auc_value
+    ))
+  }
+  
+  return(list(
+    threshold_results = results,
+    roc_curve = roc_obj
+  ))
+}
+
+# Evaluate each fold independently
+thresholds <- seq(0.1, 0.9, by = 0.05)  # Test thresholds from 0.1 to 0.9 in steps of 0.05
+
+# For each fold
+for (i in 1:length(results)) {
+  fold_model <- results[[i]]$model
+  fold_test_data <- train_test_pairs[[i]]$test
+  
+  cat("\n\n======== FOLD", i, "THRESHOLD EVALUATION ========\n")
+  
+  # Evaluate thresholds for this fold
+  fold_threshold_results <- evaluate_thresholds(fold_model, fold_test_data, thresholds)
+  
+  # Print results for this fold
+  fold_results <- fold_threshold_results$threshold_results
+  
+  # Find optimal thresholds for this fold
+  max_accuracy_threshold <- fold_results[which.max(fold_results$Accuracy), ]
+  max_f1_threshold <- fold_results[which.max(fold_results$F1_Score), ]
+  
+  # Print optimal thresholds for this fold
+  cat("Optimal threshold for maximizing accuracy:", max_accuracy_threshold$Threshold, 
+      "(Accuracy:", round(max_accuracy_threshold$Accuracy * 100, 2), "%)\n")
+  
+  cat("Optimal threshold for maximizing F1 Score:", max_f1_threshold$Threshold, 
+      "(F1 Score:", round(max_f1_threshold$F1_Score, 3), ")\n\n")
+  
+  # Print all results for this fold
+  cat("All threshold results for Fold", i, ":\n")
+  print(fold_results[, c("Threshold", "Accuracy", "F1_Score", "Precision", "Recall")])
+  
+  # Plot ROC curve for this fold
+  plot(fold_threshold_results$roc_curve, main = paste("ROC Curve - Fold", i))
+  
+  # Plot metrics vs thresholds for this fold
+  fold_plot_data <- tidyr::pivot_longer(
+    fold_results,
+    cols = c(Accuracy, Precision, Recall, F1_Score),
+    names_to = "Metric",
+    values_to = "Value"
+  )
+  
+  print(
+    ggplot(fold_plot_data, aes(x = Threshold, y = Value, color = Metric)) +
+      geom_line() +
+      geom_point() +
+      labs(title = paste("Performance Metrics Across Thresholds - Fold", i),
+           x = "Threshold",
+           y = "Value") +
+      theme_minimal()
+  )
+}
+
+# Also calculate overall average across folds for comparison
+all_fold_results <- data.frame()
+
+for (i in 1:length(results)) {
+  fold_model <- results[[i]]$model
+  fold_test_data <- train_test_pairs[[i]]$test
+  
+  # Evaluate thresholds for this fold
+  fold_threshold_results <- evaluate_thresholds(fold_model, fold_test_data, thresholds)
+  fold_results <- fold_threshold_results$threshold_results
+  fold_results$Fold <- i
+  
+  # Combine with overall results
+  all_fold_results <- rbind(all_fold_results, fold_results)
+}
+
+# Calculate average metrics across folds for each threshold
+avg_threshold_results <- all_fold_results %>%
+  dplyr::group_by(Threshold) %>%
+  dplyr::summarize(
+    Avg_Accuracy = mean(Accuracy, na.rm = TRUE),
+    Avg_Misclassification_Rate = mean(Misclassification_Rate, na.rm = TRUE),
+    Avg_Precision = mean(Precision, na.rm = TRUE),
+    Avg_Recall = mean(Recall, na.rm = TRUE),
+    Avg_F1_Score = mean(F1_Score, na.rm = TRUE),
+    Avg_Specificity = mean(Specificity, na.rm = TRUE),
+    Avg_AUC = mean(AUC, na.rm = TRUE)
+  )
+
+cat("\n\n======== OVERALL AVERAGE THRESHOLD EVALUATION ========\n")
+print(avg_threshold_results)
+```
+
+
+
+
+
+
+
+
+```{r}
+library(MASS)  # For LDA
+library(pROC)  # For ROC analysis
+
+# Function to evaluate LDA model on a single fold
+evaluate_lda_fold <- function(train_data, test_data, fold_number) {
+  # Ensure feedback is correctly handled as a factor
+  train_data$feedback <- factor(train_data$feedback, levels = c(-1, 1))
+  test_data$feedback <- factor(test_data$feedback, levels = c(-1, 1))
+  
+  # Identify PC columns
+  pc_cols <- grep("^PC\\d+_score$", colnames(train_data), value = TRUE)
+  
+  # Create formula with required variables
+  formula_vars <- c("avg_spike_count", "contrast_interaction", pc_cols)
+  formula_str <- paste("feedback ~", paste(formula_vars, collapse = " + "))
+  model_formula <- as.formula(formula_str)
+  
+  # Train LDA model
+  lda_model <- lda(model_formula, data = train_data)
+  
+  # Make predictions on test data
+  lda_pred <- predict(lda_model, newdata = test_data)
+  test_predictions <- lda_pred$class
+  test_predictions_prob <- lda_pred$posterior[, "1"]  # Posterior probabilities for class 1
+  
+  # Add diagnostic information about the predictions
+  cat("Number of NA in predictions:", sum(is.na(test_predictions)), "\n")
+  cat("Number of NA in actual feedback:", sum(is.na(test_data$feedback)), "\n")
+  cat("First 10 predictions:", as.character(head(test_predictions, 10)), "\n")
+  cat("First 10 actual values:", as.character(head(test_data$feedback, 10)), "\n")
+  
+  # Calculate accuracy
+  accuracy <- mean(test_predictions == test_data$feedback, na.rm = TRUE)
+  
+  # Create confusion matrix
+  conf_matrix <- table(Predicted = test_predictions, Actual = test_data$feedback)
+  
+  # Calculate other metrics
+  precision <- tryCatch({
+    conf_matrix["1","1"] / sum(conf_matrix["1",])
+  }, error = function(e) NA)
+  
+  recall <- tryCatch({
+    conf_matrix["1","1"] / sum(conf_matrix[,"1"])
+  }, error = function(e) NA)
+  
+  f1_score <- tryCatch({
+    2 * precision * recall / (precision + recall)
+  }, error = function(e) NA)
+  
+  # Calculate AUC
+  test_feedback_numeric <- as.numeric(test_data$feedback == "1")
+  roc_obj <- tryCatch({
+    roc(test_feedback_numeric, test_predictions_prob)
+  }, error = function(e) NULL)
+  
+  auc_value <- if(!is.null(roc_obj)) auc(roc_obj) else NA
+  
+  # Return all metrics
+  return(list(
+    fold = fold_number,
+    model = lda_model,
+    accuracy = accuracy,
+    conf_matrix = conf_matrix,
+    precision = precision,
+    recall = recall,
+    f1_score = f1_score,
+    auc = auc_value,
+    roc = roc_obj
+  ))
+}
+
+# Run evaluation for all folds
+lda_results <- list()
+for (i in 1:4) {
+  cat("\n======== Evaluating LDA Model on Fold", i, "========\n")
+  train_data <- train_test_pairs[[i]]$train
+  test_data <- train_test_pairs[[i]]$test
+  lda_results[[i]] <- evaluate_lda_fold(train_data, test_data, i)
+  
+  # Print metrics for this fold
+  cat("Fold", i, "metrics:\n")
+  cat("Accuracy:", round(lda_results[[i]]$accuracy * 100, 2), "%\n")
+  cat("Confusion Matrix:\n")
+  print(lda_results[[i]]$conf_matrix)
+  cat("Precision:", round(lda_results[[i]]$precision, 3), "\n")
+  cat("Recall:", round(lda_results[[i]]$recall, 3), "\n")
+  cat("F1 Score:", round(lda_results[[i]]$f1_score, 3), "\n")
+  cat("AUC:", round(lda_results[[i]]$auc, 3), "\n\n")
+}
+
+# Calculate average metrics across all folds
+avg_accuracy <- mean(sapply(lda_results, function(x) x$accuracy), na.rm = TRUE)
+avg_precision <- mean(sapply(lda_results, function(x) x$precision), na.rm = TRUE)
+avg_recall <- mean(sapply(lda_results, function(x) x$recall), na.rm = TRUE)
+avg_f1 <- mean(sapply(lda_results, function(x) x$f1_score), na.rm = TRUE)
+avg_auc <- mean(sapply(lda_results, function(x) x$auc), na.rm = TRUE)
+
+cat("\n======== LDA MODEL CROSS-VALIDATION SUMMARY ========\n")
+cat("Average Accuracy:", round(avg_accuracy * 100, 2), "%\n")
+cat("Average Precision:", round(avg_precision, 3), "\n")
+cat("Average Recall:", round(avg_recall, 3), "\n")
+cat("Average F1 Score:", round(avg_f1, 3), "\n")
+cat("Average AUC:", round(avg_auc, 3), "\n")
+
+# Check which variables are most important in the LDA model
+# We'll look at the coefficients of the linear discriminants
+combined_coefficients <- data.frame()
+
+for (i in 1:4) {
+  coef_vals <- lda_results[[i]]$model$scaling
+  coef_df <- data.frame(
+    Variable = rownames(coef_vals),
+    Coefficient = coef_vals[,1],  # Extract first linear discriminant
+    Abs_Coefficient = abs(coef_vals[,1]),
+    Fold = i
+  )
+  combined_coefficients <- rbind(combined_coefficients, coef_df)
+}
+
+# Calculate average absolute coefficient value for each variable
+variable_importance <- aggregate(Abs_Coefficient ~ Variable, data = combined_coefficients, FUN = mean)
+variable_importance <- variable_importance[order(variable_importance$Abs_Coefficient, decreasing = TRUE), ]
+
+cat("\n======== TOP 10 MOST IMPORTANT VARIABLES IN LDA MODEL ========\n")
+print(head(variable_importance, 10))
+
+# Compare LDA with Logistic Regression performance
+if (exists("results")) {  # Check if logistic regression results exist
+  comparison <- data.frame(
+    Model = c("Logistic Regression", "LDA"),
+    Accuracy = c(
+      mean(sapply(results, function(x) x$accuracy), na.rm = TRUE),
+      avg_accuracy
+    ),
+    Precision = c(
+      mean(sapply(results, function(x) x$precision), na.rm = TRUE),
+      avg_precision
+    ),
+    Recall = c(
+      mean(sapply(results, function(x) x$recall), na.rm = TRUE),
+      avg_recall
+    ),
+    F1_Score = c(
+      mean(sapply(results, function(x) x$f1_score), na.rm = TRUE),
+      avg_f1
+    ),
+    AUC = c(
+      mean(sapply(results, function(x) x$auc), na.rm = TRUE),
+      avg_auc
+    )
+  )
+  
+  cat("\n======== MODEL COMPARISON ========\n")
+  print(comparison)
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r, eval=FALSE}
+library(class)  # For knn function
+library(pROC)   # For ROC analysis
+library(caret)  # For createFolds
+
+# Function to evaluate kNN model on a single fold
+evaluate_knn_fold <- function(train_data, test_data, fold_number, k_values = c(3, 5, 7, 9, 11)) {
+  # Ensure feedback is correctly handled
+  train_data$feedback <- factor(train_data$feedback, levels = c(-1, 1))
+  test_data$feedback <- factor(test_data$feedback, levels = c(-1, 1))
+  
+  # Identify PC columns
+  pc_cols <- grep("^PC\\d+_score$", colnames(train_data), value = TRUE)
+  
+  # Feature variables to use
+  feature_vars <- c("avg_spike_count", "contrast_interaction", pc_cols)
+  
+  # Check if all feature variables exist in the data
+  missing_vars <- feature_vars[!feature_vars %in% colnames(train_data)]
+  if (length(missing_vars) > 0) {
+    cat("Warning: The following variables are missing:", paste(missing_vars, collapse=", "), "\n")
+    feature_vars <- feature_vars[feature_vars %in% colnames(train_data)]
+  }
+  
+  # Check that we have features to work with
+  if (length(feature_vars) == 0) {
+    return(list(success = FALSE, message = "No valid features found"))
+  }
+  
+  # Create feature matrices
+  x_train <- train_data[, feature_vars, drop=FALSE]
+  x_test <- test_data[, feature_vars, drop=FALSE]
+  
+  # Ensure all variables are numeric and handle NAs
+  for (col in feature_vars) {
+    # Convert to numeric
+    x_train[[col]] <- as.numeric(x_train[[col]])
+    x_test[[col]] <- as.numeric(x_test[[col]])
+    
+    # Check for NAs after conversion
+    if (sum(is.na(x_train[[col]])) > 0) {
+      cat("Column", col, "has", sum(is.na(x_train[[col]])), "NAs in training data\n")
+      col_mean <- mean(x_train[[col]], na.rm = TRUE)
+      x_train[[col]][is.na(x_train[[col]])] <- col_mean
+      cat("  Imputed with mean:", col_mean, "\n")
+    }
+    
+    if (sum(is.na(x_test[[col]])) > 0) {
+      cat("Column", col, "has", sum(is.na(x_test[[col]])), "NAs in test data\n")
+      # Use training mean for consistency
+      col_mean <- mean(x_train[[col]], na.rm = TRUE)
+      x_test[[col]][is.na(x_test[[col]])] <- col_mean
+      cat("  Imputed with training mean:", col_mean, "\n")
+    }
+  }
+  
+  # Double check for any remaining NAs
+  if (any(is.na(x_train))) {
+    na_counts <- colSums(is.na(x_train))
+    cat("Warning: Still have NAs in training data after imputation\n")
+    print(na_counts[na_counts > 0])
+    # Remove problematic columns if any still have NAs
+    problem_cols <- names(na_counts[na_counts > 0])
+    if (length(problem_cols) > 0) {
+      feature_vars <- setdiff(feature_vars, problem_cols)
+      cat("Removing problematic columns:", paste(problem_cols, collapse=", "), "\n")
+      # Recreate matrices without problem columns
+      x_train <- x_train[, !colnames(x_train) %in% problem_cols, drop=FALSE]
+      x_test <- x_test[, !colnames(x_test) %in% problem_cols, drop=FALSE]
+    }
+  }
+  
+  if (any(is.na(x_test))) {
+    na_counts <- colSums(is.na(x_test))
+    cat("Warning: Still have NAs in test data after imputation\n")
+    print(na_counts[na_counts > 0])
+    # Remove problematic columns if any still have NAs
+    problem_cols <- names(na_counts[na_counts > 0])
+    if (length(problem_cols) > 0) {
+      feature_vars <- setdiff(feature_vars, problem_cols)
+      cat("Removing problematic columns:", paste(problem_cols, collapse=", "), "\n")
+      # Recreate matrices without problem columns
+      x_train <- x_train[, !colnames(x_train) %in% problem_cols, drop=FALSE]
+      x_test <- x_test[, !colnames(x_test) %in% problem_cols, drop=FALSE]
+    }
+  }
+  
+  # Final check
+  if (ncol(x_train) < 1) {
+    return(list(success = FALSE, message = "No valid features remain after NA handling"))
+  }
+  
+  # Scale the features (important for kNN)
+  feature_means <- colMeans(x_train)
+  feature_sds <- apply(x_train, 2, sd)
+  
+  # Handle zero standard deviations
+  if (any(feature_sds == 0)) {
+    zero_sd_cols <- names(feature_sds[feature_sds == 0])
+    cat("Warning: Some features have zero standard deviation:", paste(zero_sd_cols, collapse=", "), "\n")
+    cat("Removing constant features\n")
+    x_train <- x_train[, feature_sds != 0, drop=FALSE]
+    x_test <- x_test[, feature_sds != 0, drop=FALSE]
+    feature_means <- feature_means[feature_sds != 0]
+    feature_sds <- feature_sds[feature_sds != 0]
+  }
+  
+  # Apply scaling
+  x_train_scaled <- scale(x_train, center = feature_means, scale = feature_sds)
+  x_test_scaled <- scale(x_test, center = feature_means, scale = feature_sds)
+  
+  # Extract response variable
+  y_train <- train_data$feedback
+  y_test <- test_data$feedback
+  
+  # Final check for any remaining NAs
+  if (any(is.na(x_train_scaled))) {
+    return(list(success = FALSE, message = "Training data still contains NAs after all processing steps"))
+  }
+  if (any(is.na(x_test_scaled))) {
+    return(list(success = FALSE, message = "Test data still contains NAs after all processing steps"))
+  }
+  
+  # Use a simplified approach for k selection to reduce chance of errors
+  best_k <- 5  # Default value
+  k_cv_results <- data.frame(k = integer(), accuracy = numeric())
+  
+  tryCatch({
+    # Try different k values
+    for (k in k_values) {
+      cat("Testing k =", k, "\n")
+      
+      # Use cross-validation on training data
+      set.seed(123)
+      cv_folds <- createFolds(y_train, k = 5, list = TRUE)
+      fold_accuracies <- numeric(length(cv_folds))
+      
+      for (j in seq_along(cv_folds)) {
+        val_idx <- cv_folds[[j]]
+        train_idx <- setdiff(seq_along(y_train), val_idx)
+        
+        # Skip if no validation samples for a class
+        if (length(unique(y_train[val_idx])) < 2) {
+          cat("Skipping CV fold", j, "- not enough class diversity\n")
+          next
+        }
+        
+        # Train kNN
+        knn_pred <- knn(
+          train = x_train_scaled[train_idx, , drop=FALSE],
+          test = x_train_scaled[val_idx, , drop=FALSE],
+          cl = y_train[train_idx],
+          k = k
+        )
+        
+        fold_accuracies[j] <- mean(knn_pred == y_train[val_idx], na.rm = TRUE)
+      }
+      
+      avg_accuracy <- mean(fold_accuracies, na.rm = TRUE)
+      k_cv_results <- rbind(k_cv_results, data.frame(k = k, accuracy = avg_accuracy))
+      cat("  Average CV accuracy:", round(avg_accuracy, 4), "\n")
+    }
+    
+    # Find best k
+    best_k <- k_cv_results$k[which.max(k_cv_results$accuracy)]
+    cat("Best k value from CV:", best_k, "\n")
+  }, error = function(e) {
+    cat("Error in k selection:", e$message, "\n")
+    cat("Using default k =", best_k, "\n")
+  })
+  
+  # Train final model with best k
+  final_pred <- tryCatch({
+    knn(
+      train = x_train_scaled,
+      test = x_test_scaled,
+      cl = y_train,
+      k = best_k,
+      prob = TRUE
+    )
+  }, error = function(e) {
+    cat("Error in final kNN prediction:", e$message, "\n")
+    return(NULL)
+  })
+  
+  if (is.null(final_pred)) {
+    return(list(success = FALSE, message = "Failed to run final kNN prediction"))
+  }
+  
+  # Extract probability information
+  knn_prob <- attr(final_pred, "prob")
+  
+  # Adjust so probabilities are for class 1
+  test_predictions_prob <- ifelse(final_pred == "1", knn_prob, 1 - knn_prob)
+  test_predictions <- final_pred
+  
+  # Calculate accuracy
+  accuracy <- mean(test_predictions == y_test, na.rm = TRUE)
+  
+  # Create confusion matrix
+  conf_matrix <- table(Predicted = test_predictions, Actual = y_test)
+  
+  # Calculate other metrics
+  precision <- tryCatch({
+    conf_matrix["1","1"] / sum(conf_matrix["1",])
+  }, error = function(e) NA)
+  
+  recall <- tryCatch({
+    conf_matrix["1","1"] / sum(conf_matrix[,"1"])
+  }, error = function(e) NA)
+  
+  f1_score <- tryCatch({
+    2 * precision * recall / (precision + recall)
+  }, error = function(e) NA)
+  
+  # Calculate AUC
+  test_feedback_numeric <- as.numeric(y_test == "1")
+  roc_obj <- tryCatch({
+    roc(test_feedback_numeric, test_predictions_prob)
+  }, error = function(e) NULL)
+  
+  auc_value <- if(!is.null(roc_obj)) auc(roc_obj) else NA
+  
+  # Return all metrics
+  return(list(
+    success = TRUE,
+    fold = fold_number,
+    best_k = best_k,
+    k_cv_results = k_cv_results,
+    accuracy = accuracy,
+    conf_matrix = conf_matrix,
+    precision = precision,
+    recall = recall,
+    f1_score = f1_score,
+    auc = auc_value,
+    roc = roc_obj,
+    feature_vars = feature_vars
+  ))
+}
+
+# Run evaluation for all folds
+knn_results <- list()
+for (i in 1:4) {
+  cat("\n======== Evaluating kNN Model on Fold", i, "========\n")
+  train_data <- train_test_pairs[[i]]$train
+  test_data <- train_test_pairs[[i]]$test
+  
+  # Create a copy of the data to avoid modifying the original
+  train_data_copy <- train_data
+  test_data_copy <- test_data
+  
+  # Check if contrast_interaction exists
+  if (!"contrast_interaction" %in% colnames(train_data_copy)) {
+    cat("Warning: contrast_interaction not found, creating it now\n")
+    # Create contrast_interaction if it doesn't exist
+    train_data_copy$contrast_interaction <- as.numeric(train_data_copy$leftcontrast) * as.numeric(train_data_copy$rightcontrast)
+    test_data_copy$contrast_interaction <- as.numeric(test_data_copy$leftcontrast) * as.numeric(test_data_copy$rightcontrast)
+  }
+  
+  # Test a range of k values, adjusting based on training data size
+  train_size <- nrow(train_data_copy)
+  max_k <- min(21, floor(sqrt(train_size)))  # Limit k to avoid overfitting
+  k_values <- c(3, 5, 7, 11, max_k)
+  k_values <- sort(unique(k_values))  # Remove duplicates and sort
+  
+  result <- evaluate_knn_fold(train_data_copy, test_data_copy, i, k_values = k_values)
+  knn_results[[i]] <- result
+  
+  if (!result$success) {
+    cat("Fold", i, "analysis failed:", result$message, "\n")
+    next
+  }
+  
+  # Print metrics for this fold
+  cat("Fold", i, "metrics with k =", result$best_k, ":\n")
+  cat("Accuracy:", round(result$accuracy * 100, 2), "%\n")
+  cat("Confusion Matrix:\n")
+  print(result$conf_matrix)
+  cat("Precision:", round(result$precision, 3), "\n")
+  cat("Recall:", round(result$recall, 3), "\n")
+  cat("F1 Score:", round(result$f1_score, 3), "\n")
+  cat("AUC:", round(result$auc, 3), "\n\n")
+  
+  # Instead of plotting, just print k values and accuracies
+  if (nrow(result$k_cv_results) > 0) {
+    cat("k values and corresponding accuracies:\n")
+    print(result$k_cv_results)
+    cat("Best k =", result$best_k, "with accuracy =", 
+        round(result$k_cv_results$accuracy[result$k_cv_results$k == result$best_k], 4), "\n")
+  }
+}
+
+# Calculate average metrics across successful folds
+successful_folds <- which(sapply(knn_results, function(x) isTRUE(x$success)))
+
+if (length(successful_folds) > 0) {
+  avg_accuracy <- mean(sapply(knn_results[successful_folds], function(x) x$accuracy), na.rm = TRUE)
+  avg_precision <- mean(sapply(knn_results[successful_folds], function(x) x$precision), na.rm = TRUE)
+  avg_recall <- mean(sapply(knn_results[successful_folds], function(x) x$recall), na.rm = TRUE)
+  avg_f1 <- mean(sapply(knn_results[successful_folds], function(x) x$f1_score), na.rm = TRUE)
+  avg_auc <- mean(sapply(knn_results[successful_folds], function(x) x$auc), na.rm = TRUE)
+  avg_k <- mean(sapply(knn_results[successful_folds], function(x) x$best_k))
+  
+  cat("\n======== KNN MODEL CROSS-VALIDATION SUMMARY ========\n")
+  cat("Average Accuracy:", round(avg_accuracy * 100, 2), "%\n")
+  cat("Average Precision:", round(avg_precision, 3), "\n")
+  cat("Average Recall:", round(avg_recall, 3), "\n")
+  cat("Average F1 Score:", round(avg_f1, 3), "\n")
+  cat("Average AUC:", round(avg_auc, 3), "\n")
+  cat("Average best k:", round(avg_k, 1), "\n")
+  
+  # Compare with other models if they exist
+  models_to_compare <- c("kNN")
+  accuracy_values <- c(avg_accuracy)
+  precision_values <- c(avg_precision)
+  recall_values <- c(avg_recall)
+  f1_values <- c(avg_f1)
+  auc_values <- c(avg_auc)
+  
+  if (exists("xgb_results")) {
+    models_to_compare <- c(models_to_compare, "XGBoost")
+    xgb_successful <- which(sapply(xgb_results, function(x) isTRUE(x$success)))
+    if (length(xgb_successful) > 0) {
+      accuracy_values <- c(accuracy_values, mean(sapply(xgb_results[xgb_successful], function(x) x$accuracy), na.rm = TRUE))
+      precision_values <- c(precision_values, mean(sapply(xgb_results[xgb_successful], function(x) x$precision), na.rm = TRUE))
+      recall_values <- c(recall_values, mean(sapply(xgb_results[xgb_successful], function(x) x$recall), na.rm = TRUE))
+      f1_values <- c(f1_values, mean(sapply(xgb_results[xgb_successful], function(x) x$f1_score), na.rm = TRUE))
+      auc_values <- c(auc_values, mean(sapply(xgb_results[xgb_successful], function(x) x$auc), na.rm = TRUE))
+    }
+  }
+  
+  if (exists("lda_results")) {
+    models_to_compare <- c(models_to_compare, "LDA")
+    accuracy_values <- c(accuracy_values, mean(sapply(lda_results, function(x) x$accuracy), na.rm = TRUE))
+    precision_values <- c(precision_values, mean(sapply(lda_results, function(x) x$precision), na.rm = TRUE))
+    recall_values <- c(recall_values, mean(sapply(lda_results, function(x) x$recall), na.rm = TRUE))
+    f1_values <- c(f1_values, mean(sapply(lda_results, function(x) x$f1_score), na.rm = TRUE))
+    auc_values <- c(auc_values, mean(sapply(lda_results, function(x) x$auc), na.rm = TRUE))
+  }
+  
+  if (exists("results")) {  # Logistic regression results
+    models_to_compare <- c(models_to_compare, "Logistic Regression")
+    accuracy_values <- c(accuracy_values, mean(sapply(results, function(x) x$accuracy), na.rm = TRUE))
+    precision_values <- c(precision_values, mean(sapply(results, function(x) x$precision), na.rm = TRUE))
+    recall_values <- c(recall_values, mean(sapply(results, function(x) x$recall), na.rm = TRUE))
+    f1_values <- c(f1_values, mean(sapply(results, function(x) x$f1_score), na.rm = TRUE))
+    auc_values <- c(auc_values, mean(sapply(results, function(x) x$auc), na.rm = TRUE))
+  }
+  
+  comparison <- data.frame(
+    Model = models_to_compare,
+    Accuracy = accuracy_values,
+    Precision = precision_values,
+    Recall = recall_values,
+    F1_Score = f1_values,
+    AUC = auc_values
+  )
+  
+  cat("\n======== MODEL COMPARISON ========\n")
+  print(comparison)
+} else {
+  cat("\nNo successful kNN model fits to report\n")
+}
+```
+ 
+
+```{r}
+library(xgboost)
+library(pROC)
+
+# Function to evaluate XGBoost model on a single fold
+evaluate_xgboost_fold <- function(train_data, test_data, fold_number) {
+  # Ensure feedback is correctly handled
+  train_data$feedback <- factor(train_data$feedback, levels = c(-1, 1))
+  test_data$feedback <- factor(test_data$feedback, levels = c(-1, 1))
+  
+  # Convert feedback to 0/1 for XGBoost
+  y_train <- as.numeric(train_data$feedback == "1")
+  
+  # Identify PC columns
+  pc_cols <- grep("^PC\\d+_score$", colnames(train_data), value = TRUE)
+  
+  # Feature variables to use
+  feature_vars <- c("avg_spike_count", "contrast_interaction", pc_cols)
+  
+  # Check if all feature variables exist in the data
+  missing_vars <- feature_vars[!feature_vars %in% colnames(train_data)]
+  if (length(missing_vars) > 0) {
+    cat("Warning: The following variables are missing:", paste(missing_vars, collapse=", "), "\n")
+    feature_vars <- feature_vars[feature_vars %in% colnames(train_data)]
+  }
+  
+  # Check that we have features to work with
+  if (length(feature_vars) == 0) {
+    return(list(success = FALSE, message = "No valid features found"))
+  }
+  
+  # Create feature matrices for XGBoost
+  # First handle missing values and convert to numeric matrix
+  x_train_df <- train_data[, feature_vars, drop=FALSE]
+  x_test_df <- test_data[, feature_vars, drop=FALSE]
+  
+  # Ensure all variables are numeric
+  for (col in feature_vars) {
+    x_train_df[[col]] <- as.numeric(x_train_df[[col]])
+    x_test_df[[col]] <- as.numeric(x_test_df[[col]])
+    
+    # Handle NAs if any
+    if (any(is.na(x_train_df[[col]]))) {
+      col_mean <- mean(x_train_df[[col]], na.rm = TRUE)
+      x_train_df[[col]][is.na(x_train_df[[col]])] <- col_mean
+    }
+    if (any(is.na(x_test_df[[col]]))) {
+      col_mean <- mean(x_train_df[[col]], na.rm = TRUE) # Use training mean
+      x_test_df[[col]][is.na(x_test_df[[col]])] <- col_mean
+    }
+  }
+  
+  # Create DMatrix objects
+  dtrain <- xgb.DMatrix(data = as.matrix(x_train_df), label = y_train)
+  
+  # Calculate class weight based on class distribution
+  neg_count <- sum(y_train == 0)
+  pos_count <- sum(y_train == 1)
+  scale_pos_weight <- neg_count / pos_count
+  
+  cat("Class distribution - Negative:", neg_count, "Positive:", pos_count, "\n")
+  cat("scale_pos_weight:", scale_pos_weight, "\n")
+  
+  # XGBoost parameters with class weighting
+  params <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    eta = 0.1,
+    max_depth = 6,
+    min_child_weight = 1,
+    subsample = 0.8,
+    colsample_bytree = 0.8,
+    scale_pos_weight = scale_pos_weight  # Add class weighting
+  )
+  
+  # Run cross-validation to find optimal number of rounds
+  cv_results <- xgb.cv(
+    params = params,
+    data = dtrain,
+    nrounds = 100,
+    nfold = 5,
+    early_stopping_rounds = 10,
+    verbose = 0
+  )
+  
+  # Get optimal number of rounds
+  best_nrounds <- cv_results$best_iteration
+  cat("Best number of rounds from CV:", best_nrounds, "\n")
+  
+  # Train the model
+  xgb_model <- xgb.train(
+    params = params,
+    data = dtrain,
+    nrounds = best_nrounds,
+    verbose = 0
+  )
+  
+  # Make predictions on test set
+  x_test_matrix <- as.matrix(x_test_df)
+  test_predictions_prob <- predict(xgb_model, x_test_matrix)
+  test_predictions <- ifelse(test_predictions_prob > 0.5, "1", "-1")
+  test_predictions <- factor(test_predictions, levels = c("-1", "1"))
+  
+  # Add diagnostic information
+  cat("Number of NA in predictions:", sum(is.na(test_predictions)), "\n")
+  cat("Number of NA in actual feedback:", sum(is.na(test_data$feedback)), "\n")
+  cat("First 10 predictions:", as.character(head(test_predictions, 10)), "\n")
+  cat("First 10 actual values:", as.character(head(test_data$feedback, 10)), "\n")
+  
+  # Calculate accuracy
+  accuracy <- mean(test_predictions == test_data$feedback, na.rm = TRUE)
+  
+  # Create confusion matrix
+  conf_matrix <- table(Predicted = test_predictions, Actual = test_data$feedback)
+  
+  # Calculate other metrics
+  precision <- tryCatch({
+    conf_matrix["1","1"] / sum(conf_matrix["1",])
+  }, error = function(e) NA)
+  
+  recall <- tryCatch({
+    conf_matrix["1","1"] / sum(conf_matrix[,"1"])
+  }, error = function(e) NA)
+  
+  f1_score <- tryCatch({
+    2 * precision * recall / (precision + recall)
+  }, error = function(e) NA)
+  
+  # Calculate AUC
+  test_feedback_numeric <- as.numeric(test_data$feedback == "1")
+  roc_obj <- tryCatch({
+    roc(test_feedback_numeric, test_predictions_prob)
+  }, error = function(e) NULL)
+  
+  auc_value <- if(!is.null(roc_obj)) auc(roc_obj) else NA
+  
+  # Get feature importance
+  importance <- xgb.importance(feature_names = feature_vars, model = xgb_model)
+  
+  # Return all metrics
+  return(list(
+    success = TRUE,
+    fold = fold_number,
+    model = xgb_model,
+    accuracy = accuracy,
+    conf_matrix = conf_matrix,
+    precision = precision,
+    recall = recall,
+    f1_score = f1_score,
+    auc = auc_value,
+    roc = roc_obj,
+    importance = importance,
+    feature_vars = feature_vars,
+    scale_pos_weight = scale_pos_weight
+  ))
+}
+
+# Run evaluation for all folds
+xgb_results <- list()
+for (i in 1:4) {
+  cat("\n======== Evaluating XGBoost Model on Fold", i, "========\n")
+  train_data <- train_test_pairs[[i]]$train
+  test_data <- train_test_pairs[[i]]$test
+  
+  # Check if contrast_interaction exists
+  if (!"contrast_interaction" %in% colnames(train_data)) {
+    cat("Warning: contrast_interaction not found, creating it now\n")
+    # Create contrast_interaction if it doesn't exist
+    train_data$contrast_interaction <- as.numeric(train_data$leftcontrast) * as.numeric(train_data$rightcontrast)
+    test_data$contrast_interaction <- as.numeric(test_data$leftcontrast) * as.numeric(test_data$rightcontrast)
+  }
+  
+  result <- evaluate_xgboost_fold(train_data, test_data, i)
+  xgb_results[[i]] <- result
+  
+  if (!result$success) {
+    cat("Fold", i, "analysis failed:", result$message, "\n")
+    next
+  }
+  
+  # Print metrics for this fold
+  cat("Fold", i, "metrics:\n")
+  cat("Accuracy:", round(result$accuracy * 100, 2), "%\n")
+  cat("Confusion Matrix:\n")
+  print(result$conf_matrix)
+  cat("Precision:", round(result$precision, 3), "\n")
+  cat("Recall:", round(result$recall, 3), "\n")
+  cat("F1 Score:", round(result$f1_score, 3), "\n")
+  cat("AUC:", round(result$auc, 3), "\n\n")
+  
+  # Print feature importance
+  cat("Feature Importance:\n")
+  if (nrow(result$importance) > 0) {
+    print(head(result$importance, 10))
+  } else {
+    cat("No feature importance available\n")
+  }
+}
+
+# Calculate average metrics across successful folds
+successful_folds <- which(sapply(xgb_results, function(x) isTRUE(x$success)))
+
+if (length(successful_folds) > 0) {
+  avg_accuracy <- mean(sapply(xgb_results[successful_folds], function(x) x$accuracy), na.rm = TRUE)
+  avg_precision <- mean(sapply(xgb_results[successful_folds], function(x) x$precision), na.rm = TRUE)
+  avg_recall <- mean(sapply(xgb_results[successful_folds], function(x) x$recall), na.rm = TRUE)
+  avg_f1 <- mean(sapply(xgb_results[successful_folds], function(x) x$f1_score), na.rm = TRUE)
+  avg_auc <- mean(sapply(xgb_results[successful_folds], function(x) x$auc), na.rm = TRUE)
+  avg_scale_pos_weight <- mean(sapply(xgb_results[successful_folds], function(x) x$scale_pos_weight), na.rm = TRUE)
+  
+  cat("\n======== XGBOOST MODEL CROSS-VALIDATION SUMMARY ========\n")
+  cat("Average Accuracy:", round(avg_accuracy * 100, 2), "%\n")
+  cat("Average Precision:", round(avg_precision, 3), "\n")
+  cat("Average Recall:", round(avg_recall, 3), "\n")
+  cat("Average F1 Score:", round(avg_f1, 3), "\n")
+  cat("Average AUC:", round(avg_auc, 3), "\n")
+  cat("Average scale_pos_weight:", round(avg_scale_pos_weight, 3), "\n")
+  
+  # Aggregate feature importance across folds
+  all_importance <- data.frame()
+  
+  for (i in successful_folds) {
+    imp <- xgb_results[[i]]$importance
+    if (nrow(imp) > 0) {
+      imp$Fold <- i
+      all_importance <- rbind(all_importance, imp)
+    }
+  }
+  
+  if (nrow(all_importance) > 0) {
+    # Average importance across folds
+    avg_importance <- aggregate(Gain ~ Feature, data = all_importance, FUN = mean)
+    avg_importance <- avg_importance[order(-avg_importance$Gain), ]
+    
+    cat("\n======== AVERAGE FEATURE IMPORTANCE ACROSS FOLDS ========\n")
+    print(avg_importance)
+  }
+  
+  # Compare with other models if they exist
+  models_to_compare <- c("XGBoost (with class weights)")
+  accuracy_values <- c(avg_accuracy)
+  precision_values <- c(avg_precision)
+  recall_values <- c(avg_recall)
+  f1_values <- c(avg_f1)
+  auc_values <- c(avg_auc)
+  
+  if (exists("lda_results")) {
+    models_to_compare <- c(models_to_compare, "LDA")
+    accuracy_values <- c(accuracy_values, mean(sapply(lda_results, function(x) x$accuracy), na.rm = TRUE))
+    precision_values <- c(precision_values, mean(sapply(lda_results, function(x) x$precision), na.rm = TRUE))
+    recall_values <- c(recall_values, mean(sapply(lda_results, function(x) x$recall), na.rm = TRUE))
+    f1_values <- c(f1_values, mean(sapply(lda_results, function(x) x$f1_score), na.rm = TRUE))
+    auc_values <- c(auc_values, mean(sapply(lda_results, function(x) x$auc), na.rm = TRUE))
+  }
+  
+  if (exists("knn_results")) {
+    models_to_compare <- c(models_to_compare, "kNN")
+    knn_successful <- which(sapply(knn_results, function(x) isTRUE(x$success)))
+    if (length(knn_successful) > 0) {
+      accuracy_values <- c(accuracy_values, mean(sapply(knn_results[knn_successful], function(x) x$accuracy), na.rm = TRUE))
+      precision_values <- c(precision_values, mean(sapply(knn_results[knn_successful], function(x) x$precision), na.rm = TRUE))
+      recall_values <- c(recall_values, mean(sapply(knn_results[knn_successful], function(x) x$recall), na.rm = TRUE))
+      f1_values <- c(f1_values, mean(sapply(knn_results[knn_successful], function(x) x$f1_score), na.rm = TRUE))
+      auc_values <- c(auc_values, mean(sapply(knn_results[knn_successful], function(x) x$auc), na.rm = TRUE))
+    }
+  }
+  
+  if (exists("results")) {  # Logistic regression results
+    models_to_compare <- c(models_to_compare, "Logistic Regression")
+    accuracy_values <- c(accuracy_values, mean(sapply(results, function(x) x$accuracy), na.rm = TRUE))
+    precision_values <- c(precision_values, mean(sapply(results, function(x) x$precision), na.rm = TRUE))
+    recall_values <- c(recall_values, mean(sapply(results, function(x) x$recall), na.rm = TRUE))
+    f1_values <- c(f1_values, mean(sapply(results, function(x) x$f1_score), na.rm = TRUE))
+    auc_values <- c(auc_values, mean(sapply(results, function(x) x$auc), na.rm = TRUE))
+  }
+  
+  comparison <- data.frame(
+    Model = models_to_compare,
+    Accuracy = accuracy_values,
+    Precision = precision_values,
+    Recall = recall_values,
+    F1_Score = f1_values,
+    AUC = auc_values
+  )
+  
+  cat("\n======== MODEL COMPARISON ========\n")
+  print(comparison)
+} else {
+  cat("\nNo successful XGBoost model fits to report\n")
+}
+```
+
+
+```{r}
+# Comprehensive Model Comparison Across Multiple Thresholds
+library(pROC)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+
+# Function to evaluate model performance at different thresholds
+evaluate_model_thresholds <- function(model_results, model_name, thresholds = seq(0.1, 0.9, by = 0.05)) {
+  # Initialize results dataframe
+  all_results <- data.frame()
+  
+  # Process each fold
+  for (i in seq_along(model_results)) {
+    if (!exists("model_results[[i]]$success") || model_results[[i]]$success == TRUE) {
+      fold_result <- model_results[[i]]
+      test_data <- train_test_pairs[[i]]$test
+      
+      # Get predictions based on model type
+      pred_probs <- NULL
+      
+      if (model_name == "XGBoost") {
+        # For XGBoost
+        x_test_df <- test_data[, fold_result$feature_vars, drop = FALSE]
+        for (col in fold_result$feature_vars) {
+          x_test_df[[col]] <- as.numeric(x_test_df[[col]])
+          if (any(is.na(x_test_df[[col]]))) {
+            col_mean <- mean(x_test_df[[col]], na.rm = TRUE)
+            x_test_df[[col]][is.na(x_test_df[[col]])] <- col_mean
+          }
+        }
+        x_test_matrix <- as.matrix(x_test_df)
+        pred_probs <- predict(fold_result$model, x_test_matrix)
+      } else if (model_name == "Logistic") {
+        # For Logistic Regression
+        pred_probs <- predict(fold_result$model, newdata = test_data, type = "response")
+      } else if (model_name == "LDA") {
+        # For LDA
+        pred_obj <- predict(fold_result$model, newdata = test_data)
+        pred_probs <- pred_obj$posterior[, "1"]  # Posterior probabilities for class 1
+      }
+      
+      # If we got valid predictions
+      if (!is.null(pred_probs)) {
+        # Convert test feedback to factor
+        test_data$feedback <- factor(test_data$feedback, levels = c("-1", "1"))
+        
+        # For each threshold
+        for (threshold in thresholds) {
+          # Make predictions based on current threshold
+          pred_classes <- ifelse(pred_probs > threshold, "1", "-1")
+          pred_classes <- factor(pred_classes, levels = c("-1", "1"))
+          
+          # Calculate metrics
+          conf_matrix <- table(Predicted = pred_classes, Actual = test_data$feedback)
+          
+          # Handle case where some classes might be missing in predictions
+          TP <- ifelse("1" %in% rownames(conf_matrix) && "1" %in% colnames(conf_matrix), 
+                      conf_matrix["1", "1"], 0)
+          FP <- ifelse("1" %in% rownames(conf_matrix) && "-1" %in% colnames(conf_matrix), 
+                      conf_matrix["1", "-1"], 0)
+          TN <- ifelse("-1" %in% rownames(conf_matrix) && "-1" %in% colnames(conf_matrix), 
+                      conf_matrix["-1", "-1"], 0)
+          FN <- ifelse("-1" %in% rownames(conf_matrix) && "1" %in% colnames(conf_matrix), 
+                      conf_matrix["-1", "1"], 0)
+          
+          accuracy <- (TP + TN) / (TP + TN + FP + FN)
+          precision <- ifelse(TP + FP > 0, TP / (TP + FP), NA)
+          recall <- ifelse(TP + FN > 0, TP / (TP + FN), NA)
+          f1_score <- ifelse(!is.na(precision) && !is.na(recall) && precision + recall > 0, 
+                            2 * precision * recall / (precision + recall), NA)
+          specificity <- ifelse(TN + FP > 0, TN / (TN + FP), NA)
+          balanced_acc <- (recall + specificity) / 2
+          
+          # Calculate AUC (constant for all thresholds, but include for completeness)
+          test_feedback_numeric <- as.numeric(test_data$feedback == "1")
+          roc_obj <- tryCatch({
+            roc(test_feedback_numeric, pred_probs)
+          }, error = function(e) NULL)
+          
+          auc_value <- if(!is.null(roc_obj)) auc(roc_obj) else NA
+          
+          # Add to results
+          fold_results <- data.frame(
+            Model = model_name,
+            Fold = i,
+            Threshold = threshold,
+            Accuracy = accuracy,
+            Precision = precision,
+            Recall = recall,
+            Specificity = specificity,
+            F1_Score = f1_score,
+            Balanced_Accuracy = balanced_acc,
+            AUC = auc_value,
+            TP = TP,
+            FP = FP,
+            TN = TN,
+            FN = FN
+          )
+          
+          all_results <- rbind(all_results, fold_results)
+        }
+      }
+    }
+  }
+  
+  return(all_results)
+}
+
+# Function to calculate average performance across folds for each threshold
+calculate_avg_performance <- function(threshold_results) {
+  avg_results <- threshold_results %>%
+    group_by(Model, Threshold) %>%
+    summarize(
+      Avg_Accuracy = mean(Accuracy, na.rm = TRUE),
+      Avg_Precision = mean(Precision, na.rm = TRUE),
+      Avg_Recall = mean(Recall, na.rm = TRUE),
+      Avg_Specificity = mean(Specificity, na.rm = TRUE),
+      Avg_F1_Score = mean(F1_Score, na.rm = TRUE),
+      Avg_Balanced_Accuracy = mean(Balanced_Accuracy, na.rm = TRUE),
+      Avg_AUC = mean(AUC, na.rm = TRUE),
+      SD_Accuracy = sd(Accuracy, na.rm = TRUE),
+      SD_F1_Score = sd(F1_Score, na.rm = TRUE),
+      SD_Balanced_Accuracy = sd(Balanced_Accuracy, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  return(avg_results)
+}
+
+# Define thresholds to test
+thresholds <- seq(0.05, 0.95, by = 0.05)
+
+# Run evaluation for each model (if it exists)
+all_model_results <- data.frame()
+
+# Check each model and run evaluation if it exists
+if (exists("xgb_results")) {
+  cat("Evaluating XGBoost model across thresholds...\n")
+  xgb_threshold_results <- evaluate_model_thresholds(xgb_results, "XGBoost", thresholds)
+  all_model_results <- rbind(all_model_results, xgb_threshold_results)
+}
+
+if (exists("results")) {  # Assuming this is logistic regression
+  cat("Evaluating Logistic Regression model across thresholds...\n")
+  log_threshold_results <- evaluate_model_thresholds(results, "Logistic", thresholds)
+  all_model_results <- rbind(all_model_results, log_threshold_results)
+}
+
+if (exists("lda_results")) {
+  cat("Evaluating LDA model across thresholds...\n")
+  lda_threshold_results <- evaluate_model_thresholds(lda_results, "LDA", thresholds)
+  all_model_results <- rbind(all_model_results, lda_threshold_results)
+}
+
+# Calculate average performance across folds
+avg_results <- calculate_avg_performance(all_model_results)
+
+# Find optimal thresholds for different metrics
+optimal_thresholds <- data.frame(
+  Model = character(),
+  For_Accuracy = numeric(),
+  Accuracy_Value = numeric(),
+  For_F1 = numeric(),
+  F1_Value = numeric(),
+  For_Balanced_Accuracy = numeric(),
+  Balanced_Accuracy_Value = numeric()
+)
+
+for (model_name in unique(avg_results$Model)) {
+  model_results <- avg_results[avg_results$Model == model_name, ]
+  
+  # Find optimal thresholds
+  accuracy_idx <- which.max(model_results$Avg_Accuracy)
+  f1_idx <- which.max(model_results$Avg_F1_Score)
+  balanced_acc_idx <- which.max(model_results$Avg_Balanced_Accuracy)
+  
+  optimal_thresholds <- rbind(optimal_thresholds, data.frame(
+    Model = model_name,
+    For_Accuracy = model_results$Threshold[accuracy_idx],
+    Accuracy_Value = model_results$Avg_Accuracy[accuracy_idx],
+    For_F1 = model_results$Threshold[f1_idx],
+    F1_Value = model_results$Avg_F1_Score[f1_idx],
+    For_Balanced_Accuracy = model_results$Threshold[balanced_acc_idx],
+    Balanced_Accuracy_Value = model_results$Avg_Balanced_Accuracy[balanced_acc_idx]
+  ))
+}
+
+# Create plots
+# 1. Accuracy vs Threshold
+p1 <- ggplot(avg_results, aes(x = Threshold, y = Avg_Accuracy, color = Model)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Avg_Accuracy - SD_Accuracy, ymax = Avg_Accuracy + SD_Accuracy), width = 0.02, alpha = 0.5) +
+  labs(title = "Accuracy vs Threshold", x = "Threshold", y = "Average Accuracy") +
+  theme_minimal()
+
+# 2. F1 Score vs Threshold
+p2 <- ggplot(avg_results, aes(x = Threshold, y = Avg_F1_Score, color = Model)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Avg_F1_Score - SD_F1_Score, ymax = Avg_F1_Score + SD_F1_Score), width = 0.02, alpha = 0.5) +
+  labs(title = "F1 Score vs Threshold", x = "Threshold", y = "Average F1 Score") +
+  theme_minimal()
+
+# 3. Balanced Accuracy vs Threshold
+p3 <- ggplot(avg_results, aes(x = Threshold, y = Avg_Balanced_Accuracy, color = Model)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Avg_Balanced_Accuracy - SD_Balanced_Accuracy, ymax = Avg_Balanced_Accuracy + SD_Balanced_Accuracy), width = 0.02, alpha = 0.5) +
+  labs(title = "Balanced Accuracy vs Threshold", x = "Threshold", y = "Average Balanced Accuracy") +
+  theme_minimal()
+
+# 4. Precision-Recall curves
+p4 <- ggplot(avg_results, aes(x = Avg_Recall, y = Avg_Precision, color = Model)) +
+  geom_path(aes(group = Model), linewidth = 1) +
+  geom_point(aes(size = Threshold)) +
+  labs(title = "Precision-Recall Curve", x = "Recall", y = "Precision") +
+  theme_minimal() +
+  guides(size = guide_legend(title = "Threshold"))
+
+# Print summary tables
+cat("\n======== OPTIMAL THRESHOLDS BY METRIC ========\n")
+print(optimal_thresholds)
+
+cat("\n======== DETAILED METRICS AT OPTIMAL BALANCED ACCURACY THRESHOLD ========\n")
+optimal_metrics <- data.frame()
+
+for (i in 1:nrow(optimal_thresholds)) {
+  model_name <- optimal_thresholds$Model[i]
+  balanced_threshold <- optimal_thresholds$For_Balanced_Accuracy[i]
+  
+  # Get metrics at this threshold
+  model_metrics <- avg_results %>%
+    filter(Model == model_name, abs(Threshold - balanced_threshold) < 0.001) %>%
+    select(Model, Threshold, starts_with("Avg_"))
+  
+  optimal_metrics <- rbind(optimal_metrics, model_metrics)
+}
+
+print(optimal_metrics)
+
+# Grid arrange the plots
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+
+# Create a comparative plot for all metrics
+comparison_data <- avg_results %>%
+  pivot_longer(
+    cols = c(Avg_Accuracy, Avg_Precision, Avg_Recall, Avg_F1_Score, Avg_Balanced_Accuracy),
+    names_to = "Metric",
+    values_to = "Value"
+  ) %>%
+  mutate(Metric = gsub("Avg_", "", Metric))
+
+p5 <- ggplot(comparison_data, aes(x = Threshold, y = Value, color = Model, linetype = Metric)) +
+  geom_line() +
+  labs(title = "All Metrics vs Threshold by Model", x = "Threshold", y = "Value") +
+  theme_minimal() +
+  facet_wrap(~ Model, scales = "free_y")
+
+print(p5)
+
+# Return the most important results
+list(
+  all_threshold_results = all_model_results,
+  average_results = avg_results,
+  optimal_thresholds = optimal_thresholds,
+  optimal_metrics = optimal_metrics
+)
+```
+
+
+
+
+
+
+We also tried a lasso model, but found that there was no successful lasso model to fit to our data. 
+
+
+
+
+
+
+
+
+
+
+Questions for Claude
+- are the other models other than logistic regression using class weights to wieght -1 vs 1 feedback in the predition 
+
+
+
+
+
+
+
+******************************************
+
+
+
+I will continue to explore the relationship between feedback type and the brain areas of the neurons that spike in each trial. 
+
+I will also see if the same neurons that spike during a successful feedback hold true with different mice. 
+
+I will see if there is a difference in neuron type or feedback success in right versus left contrast. 
+
+
+is there a time point where there are more spikes?
+average_spk_count = average across all 40 time points i think 
+
+Part 2. Data integration. Using the findings in Part 1, we will propose an approach to combine data across trials by (i) extracting the shared patters across sessions and/or (ii) addressing the differences between sessions. The goal of this part is to enable the borrowing of information across sessions to enhance the prediction performance in Part 3. 
+
+
+
+
+
+
+# Project report outline 
+
+The final submission of the course project is a report in HTML format, along with a link to the Github repository that can be used to reproduce your report. The project report must be legible and the exposition of the report is part of the grading rubrics. For consistency in grading, please follow the outline listed below. 
+
+- Title.
+
+- Abstract (5 pts).
+
+- Section 1 Introduction (5 pts). 
+
+- Section 2 Exploratory analysis (20 pts). 
+
+- Section 3 Data integration (20 pts). 
+
+- Section 4 Predictive modeling (20 pts). 
+
+- Section 5 Prediction performance on the test sets (5 pts). 
+
+- Section 6 Discussion (5 pts). 
+
+In addition, the remaining 20 points will be allocated to report organization and legibility and creativity and originality. 
+
+
+# Project milestones
+
+A series of milestones are set throughout the quarter in order to encourage, and reward, early starts on the course project. Furthermore, there are several project discussion sessions throughout the quarter for students to utilize. 
+
+
+- Project proposal January 24th (optional): 0 points. Students are **strongly recommended** to attend the project discussion during the regular lecture time on Zoom. 
+- Milestone I February 14th  (optional): 0 points but eligible for bonus points for outstanding progress or novel findings. Draft analysis and results for Part I visualization. Students are **recommended** to attend the optional project discussion during the regular lecture time on Zoom. 
+- Milestone II March 7th (optional): 0 points but eligible for bonus points for outstanding progress or novel findings. Draft analysis and results for Part II data integration. Students are **recommended** to attend the optional project discussion during the regular lecture time on Zoom. 
+- March 17th Project report: 60 points. Students are **strongly recommended** to attend at least one project consulting session in Week 10. 
+
+
+**Remark**: One important thing to note is that a course project is not an exam where questions on the exam are kept confidential. Instead, the instructor and TAs are more than happy to share with you our thoughts on how to improve your projects before you submit them. From a practical perspective, it is more rewarding to solicit advice and suggestions before we grade your reports than to wait for feedback afterwards. That said, we understand that you may have other courses and obligations that are more important than this course. Therefore, all submissions and attendance are optional except for the final project report due on June 12th.
+
+# Reference {-}
+
+
+Steinmetz, N.A., Zatka-Haas, P., Carandini, M. et al. Distributed coding of choice, action and engagement across the mouse brain. Nature 576, 266–273 (2019). https://doi.org/10.1038/s41586-019-1787-x
+
+
+- Exploratory data analysis
+- raw data into matrix x
+- prediciton model: x --> y --> -1 or 1
+  - using matrix x 
+  
+  - average spike over time
+  
+  - for one session: put it into x matrix
+  - 
+  
+   plug picture into prediction model 
+   
+   - 01 matrix into signal: functional PCA to transformed signal
+  - outcome = 
+
+- TOC tells you how good the regression is
+- compare the different models to see which is better
+- feed PCA --> tabular data into here (look at last few weeks of notes to get to this point)
+
+*** can look at past rpojects for inspiration
+
+1) EDA
+feature ~ feedback (success/success+failure)
+
+Result: have few features you are goingn to incorporate
+- how does success vary with feature 
+- ex) feedback type vs brain area
+- what types of things have people found online
+
+2) transform data to get X matrix: summary statistic or dimensional reduction technique (clustering/PCA)
+
+- for the pca, you input a dataframe that has all of the trials from all of the different sessions with all of the variables you think are important based ont he EDA portion
+- too many features = decreased prediction power
+- start with one sessionn, thenn concatenate other sessions after
+  - different sessions have different numbers of brain areas
+  - compare different types of PCA (with different variables), can compare it to just doing prediction on the full dataset
+
+- dat matrix in Discussion 8: X matrix
+  - n observzations, feedback type, decisionn, average_spikes
+
+make a matrix of X: number of features, number of observations
+
+3) Fit a prediction model 
+ - looking at accuracy and area under curve (want model that yields highest values of both)
+  - look at percent error and area under curve
+ - look at many different types of models 
+ - logistic regression: strong bias towards success
+    -  can try to address this through resampling to have equal number of successes and failures in sample before making X matrix
+    - weighting the faiolure group
+  - model should perform better than a logistic regression
+  
+  
+  4) Test data set
+  - another way of checking strength of model
+  
+  
+  - trainig dataset
+  - if our test dataset only sess 1 and 18, then should we use the entire dataset for training the model?
+  - all sessions and mice are very different
+  - how do I reliably train a model with only 200 trials if I use only session 1
+  - how do you justify your point
+  - polish the format of this html file 
+    
+    
+  * spike correlated to success
+  - left contrast and right contrast
+    
+    
+    summation of wi(yi - fxi)^2
+ - loigstic regression is not a good model when using innput of summary statistic
+ 
+ 
+ 
+ - train separate model under separate condtions?
+  - if both L and R contrast are the same, then the outocme is randomized
+  - different than if the mous eactually turns the wheel correctly?
+  - keep this accuracy separately from other conditions
+ 
+ 
+ - should we weight the data before prediction
+ -  after pca but before prediction
+ 
+ 
+ 
+ - format this report correctly
+ - document what is going on
+ 
+ 
+ 
+ - utilize code from discussion sections and proejct consulting sessions
+ 
+ - can sign up for two slots 
+ 
+ 
+ 
+ 
+talk with veda
+- veda did an chi square test to determine if congrast has an effect on feedvback score
+- do another test evliuating the effect of spike count on feedback score 
+
+
+friday
+- consultingmsII
+- other ways to have mean statistic that isnt average spike count
+- pay attention to time windows: 
+  - lets only look at certain time windows
+  - justify why you are using the variables that you are doing
+  - YOU ARE MAKING CHOICES: JUSTIFY
+  - if you only want to analyze a few sessions, explain why
+  - explain what criteria you are using for evaluaiting a fitted model 
+  
+  -  compare PCA apporach to benchmark approach in this course notes
+  - how many PCA are we going to use
+  - on each session separately
+  - PC score: three entry vector for each trial in session 1, 2
+  - randomlydplyr::select 100 neurons from each session 
+  - PCA assumes low dimensional variables behind dataset: rationale behind downsampling
+  - it might be ideal to do this, but I don't have time so I'm doing this less good approach..... 
+  
+  
+  
+  
+  
+  
+  Appendix
+  
+  Bootstrapping:
+```{r, eval=FALSE}
+
+# Load required libraries
+library(boot)
+
+# Function to calculate PCs needed for 90% variance in bootstrap samples
+bootstrap_pca <- function(session_data, session_id, n_bootstrap = 1000) {
+  # First check if spks has elements
+  if (length(session_data$spks) == 0 || all(sapply(session_data$spks, length) == 0)) {
+    return(list(success = FALSE, message = "No valid spike data"))
+  }
+  
+  # Create spike matrix as before
+  element_lengths <- sapply(session_data$spks, length)
+  n_trials <- length(session_data$spks)
+  max_length <- max(element_lengths)
+  
+  spike_matrix <- matrix(0, nrow = n_trials, ncol = max_length)
+  
+  for (i in 1:n_trials) {
+    if (length(session_data$spks[[i]]) > 0) {
+      spk_data <- session_data$spks[[i]]
+      spike_matrix[i, 1:length(spk_data)] <- spk_data
+    }
+  }
+  
+  # Check for constant columns
+  col_vars <- apply(spike_matrix, 2, var)
+  non_zero_vars <- col_vars > 0
+  
+  if (sum(non_zero_vars) < 2) {
+    return(list(success = FALSE, message = "Not enough variable columns for PCA"))
+  }
+  
+  # Keep only columns with variance
+  spike_matrix_filtered <- spike_matrix[, non_zero_vars, drop = FALSE]
+  
+  # Define bootstrap function to calculate PCs for 90% variance
+  calc_pcs_90 <- function(data, indices) {
+    # Resample data
+    resampled_data <- data[indices, ]
+    
+    # Run PCA
+    pca_result <- tryCatch({
+      prcomp(resampled_data, scale = TRUE)
+    }, error = function(e) {
+      return(NULL)
+    })
+    
+    if (is.null(pca_result)) {
+      return(NA)
+    }
+    
+    # Calculate variance explained
+    var_explained <- pca_result$sdev^2 / sum(pca_result$sdev^2)
+    cumulative_var <- cumsum(var_explained)
+    
+    # PCs for 90% variance
+    pcs_90 <- min(which(cumulative_var >= 0.9))
+    if (is.infinite(pcs_90)) pcs_90 <- length(var_explained)
+    
+    return(pcs_90)
+  }
+  
+  # Perform bootstrap
+  boot_results <- boot(data = spike_matrix_filtered, 
+                       statistic = calc_pcs_90, 
+                       R = n_bootstrap)
+  
+  # Calculate statistics
+  mean_pcs <- mean(boot_results$t, na.rm = TRUE)
+  median_pcs <- median(boot_results$t, na.rm = TRUE)
+  ci_pcs <- boot.ci(boot_results, type = "perc", conf = 0.95)
+  
+  # Return results
+  return(list(
+    success = TRUE,
+    session_id = session_id,
+    n_trials = n_trials,
+    n_features = sum(non_zero_vars),
+    mean_pcs_90 = mean_pcs,
+    median_pcs_90 = median_pcs,
+    ci_low = if (!is.null(ci_pcs)) ci_pcs$percent[4] else NA,
+    ci_high = if (!is.null(ci_pcs)) ci_pcs$percent[5] else NA,
+    boot_samples = boot_results$t
+  ))
+}
+
+# Process all sessions
+bootstrap_results <- list()
+for (i in 1:18) {
+  cat("\nBootstrapping session", i, "\n")
+  
+  # Check if session exists
+  if (exists(paste0("session", i)) || exists("session") && length(session) >= i) {
+    # Get the correct session data
+    if (exists(paste0("session", i))) {
+      session_data <- get(paste0("session", i))
+    } else {
+      session_data <- session[[i]]
+    }
+    
+    # Bootstrap the session
+    result <- bootstrap_pca(session_data, i)
+    bootstrap_results[[as.character(i)]] <- result
+    
+    if (result$success) {
+      cat("  Success! For session", i, ":\n")
+      cat("  Mean PCs for 90% variance:", result$mean_pcs_90, "\n")
+      cat("  Median PCs for 90% variance:", result$median_pcs_90, "\n")
+      cat("  95% CI:", result$ci_low, "-", result$ci_high, "\n")
+    } else {
+      cat("  Failed:", result$message, "\n")
+    }
+  } else {
+    cat("Session", i, "data not found\n")
+    bootstrap_results[[as.character(i)]] <- list(success = FALSE, message = "Session data not found")
+  }
+}
+
+# Create summary table
+bootstrap_summary <- data.frame(
+  Session = integer(),
+  NumTrials = integer(),
+  NumFeatures = integer(),
+  Mean_PCs_90 = numeric(),
+  Median_PCs_90 = numeric(),
+  CI_Low = numeric(),
+  CI_High = numeric()
+)
+
+for (session_id in names(bootstrap_results)) {
+  result <- bootstrap_results[[session_id]]
+  if (result$success) {
+    bootstrap_summary <- rbind(bootstrap_summary, data.frame(
+      Session = as.integer(session_id),
+      NumTrials = result$n_trials,
+      NumFeatures = result$n_features,
+      Mean_PCs_90 = result$mean_pcs_90,
+      Median_PCs_90 = result$median_pcs_90,
+      CI_Low = result$ci_low,
+      CI_High = result$ci_high
+    ))
+  } else {
+    # Add a row with NA values for failed sessions
+    bootstrap_summary <- rbind(bootstrap_summary, data.frame(
+      Session = as.integer(session_id),
+      NumTrials = NA,
+      NumFeatures = NA,
+      Mean_PCs_90 = NA,
+      Median_PCs_90 = NA,
+      CI_Low = NA,
+      CI_High = NA
+    ))
+  }
+}
+
+# Sort by session and print
+bootstrap_summary <- bootstrap_summary[order(bootstrap_summary$Session), ]
+print(bootstrap_summary)
+
+# Calculate an optimal PC count across all sessions
+successful_sessions <- bootstrap_summary[!is.na(bootstrap_summary$Mean_PCs_90), ]
+
+if (nrow(successful_sessions) > 0) {
+  # Find the maximum of the upper CI bounds
+  max_ci_high <- max(successful_sessions$CI_High, na.rm = TRUE)
+  
+  # Find the median of the median PC counts
+  median_of_medians <- median(successful_sessions$Median_PCs_90, na.rm = TRUE)
+  
+  # Calculate a robust number that works for all sessions
+  robust_pc_count <- ceiling(max_ci_high)
+  
+  cat("\nRecommended consistent PC count for all sessions:", robust_pc_count, "\n")
+  cat("This covers the 95% confidence interval upper bound for all sessions\n")
+  cat("Median of median PC counts across sessions:", median_of_medians, "\n")
+  
+  # Calculate what percentage of features this represents for each session
+  bootstrap_summary$Percent_Features <- (robust_pc_count / bootstrap_summary$NumFeatures) * 100
+  
+  cat("\nVariance explained with", robust_pc_count, "PCs for each session:\n")
+  
+  # Calculate variance explained by the robust PC count for each session
+  for (i in 1:nrow(bootstrap_summary)) {
+    session_id <- bootstrap_summary$Session[i]
+    if (exists(paste0("session", session_id)) || exists("session") && length(session) >= session_id) {
+      # Get correct session data
+      if (exists(paste0("session", session_id))) {
+        session_data <- get(paste0("session", session_id))
+      } else {
+        session_data <- session[[session_id]]
+      }
+      
+      # Skip if no valid data
+      if (length(session_data$spks) == 0 || all(sapply(session_data$spks, length) == 0)) {
+        cat("  Session", session_id, ": No valid data\n")
+        next
+      }
+      
+      # Create spike matrix
+      element_lengths <- sapply(session_data$spks, length)
+      spike_matrix <- matrix(0, nrow = length(session_data$spks), ncol = max(element_lengths))
+      
+      for (j in 1:length(session_data$spks)) {
+        if (length(session_data$spks[[j]]) > 0) {
+          spk_data <- session_data$spks[[j]]
+          spike_matrix[j, 1:length(spk_data)] <- spk_data
+        }
+      }
+      
+      # Filter columns
+      col_vars <- apply(spike_matrix, 2, var)
+      non_zero_vars <- col_vars > 0
+      
+      if (sum(non_zero_vars) < 2) {
+        cat("  Session", session_id, ": Not enough variable columns\n")
+        next
+      }
+      
+      spike_matrix_filtered <- spike_matrix[, non_zero_vars, drop = FALSE]
+      
+      # Run PCA
+      tryCatch({
+        pca_result <- prcomp(spike_matrix_filtered, scale = TRUE)
+        var_explained <- pca_result$sdev^2 / sum(pca_result$sdev^2)
+        cumulative_var <- cumsum(var_explained)
+        
+        # Get variance explained by robust PC count
+        pc_count <- min(robust_pc_count, length(cumulative_var))
+        var_explained_robust <- cumulative_var[pc_count] * 100
+        
+        cat("  Session", session_id, ": ", round(var_explained_robust, 2), "% variance explained with", pc_count, "PCs\n")
+        
+        # Update the variance explained in the summary
+        bootstrap_summary$Variance_Explained[i] <- var_explained_robust
+      }, error = function(e) {
+        cat("  Session", session_id, ": Error in PCA:", e$message, "\n")
+      })
+    }
+  }
+}
+```
+
+Lasso model:
+```{r, eval=FALSE}
+library(glmnet)
+library(pROC)
+
+# Function to evaluate LASSO model on a single fold
+evaluate_lasso_fold <- function(train_data, test_data, fold_number) {
+  # Ensure feedback is correctly handled
+  train_data$feedback <- factor(train_data$feedback, levels = c(-1, 1))
+  test_data$feedback <- factor(test_data$feedback, levels = c(-1, 1))
+  
+  # Convert feedback to numeric (0/1) for LASSO
+  y_train <- as.numeric(train_data$feedback == "1")
+  
+  # Calculate class weights
+  n_samples <- length(y_train)
+  n_neg <- sum(y_train == 0)
+  n_pos <- sum(y_train == 1)
+  
+  # Class weights (inverting class frequencies)
+  w_neg <- n_samples / (2 * n_neg)
+  w_pos <- n_samples / (2 * n_pos)
+  
+  # Assign weights to observations
+  weights <- ifelse(y_train == 0, w_neg, w_pos)
+  
+  cat("Class distribution - Negative:", n_neg, "Positive:", n_pos, "\n")
+  cat("Class weights - Negative:", w_neg, "Positive:", w_pos, "\n")
+  
+  # Identify PC columns
+  pc_cols <- grep("^PC\\d+_score$", colnames(train_data), value = TRUE)
+  
+  # Feature variables to use
+  feature_vars <- c("avg_spike_count", "contrast_interaction", pc_cols)
+  
+  # Check if all feature variables exist in the data
+  missing_vars <- feature_vars[!feature_vars %in% colnames(train_data)]
+  if (length(missing_vars) > 0) {
+    cat("Warning: The following variables are missing:", paste(missing_vars, collapse=", "), "\n")
+    feature_vars <- feature_vars[feature_vars %in% colnames(train_data)]
+  }
+  
+  # Check that we have features to work with
+  if (length(feature_vars) == 0) {
+    return(list(success = FALSE, message = "No valid features found"))
+  }
+  
+  # Create feature matrices
+  x_train_df <- train_data[, feature_vars, drop=FALSE]
+  x_test_df <- test_data[, feature_vars, drop=FALSE]
+  
+  # Ensure all variables are numeric and handle NAs
+  for (col in feature_vars) {
+    # Convert to numeric
+    x_train_df[[col]] <- as.numeric(x_train_df[[col]])
+    x_test_df[[col]] <- as.numeric(x_test_df[[col]])
+    
+    # Handle NAs
+    if (any(is.na(x_train_df[[col]]))) {
+      col_mean <- mean(x_train_df[[col]], na.rm = TRUE)
+      x_train_df[[col]][is.na(x_train_df[[col]])] <- col_mean
+    }
+    if (any(is.na(x_test_df[[col]]))) {
+      col_mean <- mean(x_train_df[[col]], na.rm = TRUE) # Use training mean
+      x_test_df[[col]][is.na(x_test_df[[col]])] <- col_mean
+    }
+  }
+  
+  # Convert to matrices
+  x_train <- as.matrix(x_train_df)
+  x_test <- as.matrix(x_test_df)
+  
+  # Run cross-validation to find optimal lambda
+  set.seed(123)
+  cv_lasso <- tryCatch({
+    cv.glmnet(x_train, y_train, 
+              alpha = 1,           # LASSO regression
+              family = "binomial", # For binary classification
+              weights = weights,   # Apply class weights
+              type.measure = "auc", 
+              nfolds = 5)
+  }, error = function(e) {
+    cat("Error in cv.glmnet:", e$message, "\n")
+    return(NULL)
+  })
+  
+  if (is.null(cv_lasso)) {
+    return(list(success = FALSE, message = "LASSO cross-validation failed"))
+  }
+  
+  # Get the best lambda values
+  lambda_min <- cv_lasso$lambda.min  # Lambda that gives minimum mean CV error
+  lambda_1se <- cv_lasso$lambda.1se  # Largest lambda such that error is within 1 SE of the minimum
+  
+  cat("Lambda min:", lambda_min, "\n")
+  cat("Lambda 1se:", lambda_1se, "\n")
+  
+  # Train LASSO model with the optimal lambda (1se is more parsimonious)
+  lasso_model <- glmnet(x_train, y_train, 
+                        alpha = 1, 
+                        family = "binomial",
+                        weights = weights,
+                        lambda = lambda_1se)
+  
+  # Make predictions on test data
+  test_predictions_prob <- predict(lasso_model, newx = x_test, type = "response")
+  test_predictions <- ifelse(test_predictions_prob > 0.5, "1", "-1")
+  test_predictions <- factor(test_predictions, levels = c("-1", "1"))
+  
+  # Calculate accuracy
+  accuracy <- mean(test_predictions == test_data$feedback, na.rm = TRUE)
+  
+  # Create confusion matrix
+  conf_matrix <- table(Predicted = test_predictions, Actual = test_data$feedback)
+  
+  # Calculate other metrics
+  precision <- tryCatch({
+    conf_matrix["1","1"] / sum(conf_matrix["1",])
+  }, error = function(e) NA)
+  
+  recall <- tryCatch({
+    conf_matrix["1","1"] / sum(conf_matrix[,"1"])
+  }, error = function(e) NA)
+  
+  f1_score <- tryCatch({
+    2 * precision * recall / (precision + recall)
+  }, error = function(e) NA)
+  
+  # Calculate AUC
+  test_feedback_numeric <- as.numeric(test_data$feedback == "1")
+  roc_obj <- tryCatch({
+    roc(test_feedback_numeric, as.vector(test_predictions_prob))
+  }, error = function(e) NULL)
+  
+  auc_value <- if(!is.null(roc_obj)) auc(roc_obj) else NA
+  
+  # Get non-zero coefficients (selected features)
+  coef_matrix <- as.matrix(coef(lasso_model))
+  nonzero_coefs <- coef_matrix[coef_matrix != 0, , drop = FALSE]
+  
+  return(list(
+    success = TRUE,
+    fold = fold_number,
+    model = lasso_model,
+    cv_model = cv_lasso,
+    accuracy = accuracy,
+    conf_matrix = conf_matrix,
+    precision = precision,
+    recall = recall,
+    f1_score = f1_score,
+    auc = auc_value,
+    roc = roc_obj,
+    nonzero_coefs = nonzero_coefs,
+    feature_vars = feature_vars,
+    class_weights = c(negative = w_neg, positive = w_pos)
+  ))
+}
+
+# Run evaluation for all folds
+lasso_results <- list()
+for (i in 1:4) {
+  cat("\n======== Evaluating LASSO Model on Fold", i, "========\n")
+  train_data <- train_test_pairs[[i]]$train
+  test_data <- train_test_pairs[[i]]$test
+  
+  # Check if contrast_interaction exists
+  if (!"contrast_interaction" %in% colnames(train_data)) {
+    cat("Warning: contrast_interaction not found, creating it now\n")
+    train_data$contrast_interaction <- as.numeric(train_data$leftcontrast) * as.numeric(train_data$rightcontrast)
+    test_data$contrast_interaction <- as.numeric(test_data$leftcontrast) * as.numeric(test_data$rightcontrast)
+  }
+  
+  result <- evaluate_lasso_fold(train_data, test_data, i)
+  lasso_results[[i]] <- result
+  
+  if (!result$success) {
+    cat("Fold", i, "analysis failed:", result$message, "\n")
+    next
+  }
+  
+  # Print metrics for this fold
+  cat("Fold", i, "metrics:\n")
+  cat("Accuracy:", round(result$accuracy * 100, 2), "%\n")
+  cat("Confusion Matrix:\n")
+  print(result$conf_matrix)
+  cat("Precision:", round(result$precision, 3), "\n")
+  cat("Recall:", round(result$recall, 3), "\n")
+  cat("F1 Score:", round(result$f1_score, 3), "\n")
+  cat("AUC:", round(result$auc, 3), "\n\n")
+  
+  # Print selected features (non-zero coefficients)
+  cat("Selected Features (non-zero coefficients):\n")
+  print(result$nonzero_coefs)
+  cat("Number of features selected:", nrow(result$nonzero_coefs) - 1, "\n\n")  # -1 for intercept
+}
+
+# Calculate average metrics across successful folds
+successful_folds <- which(sapply(lasso_results, function(x) isTRUE(x$success)))
+
+if (length(successful_folds) > 0) {
+  avg_accuracy <- mean(sapply(lasso_results[successful_folds], function(x) x$accuracy), na.rm = TRUE)
+  avg_precision <- mean(sapply(lasso_results[successful_folds], function(x) x$precision), na.rm = TRUE)
+  avg_recall <- mean(sapply(lasso_results[successful_folds], function(x) x$recall), na.rm = TRUE)
+  avg_f1 <- mean(sapply(lasso_results[successful_folds], function(x) x$f1_score), na.rm = TRUE)
+  avg_auc <- mean(sapply(lasso_results[successful_folds], function(x) x$auc), na.rm = TRUE)
+  
+  cat("\n======== LASSO MODEL CROSS-VALIDATION SUMMARY ========\n")
+  cat("Average Accuracy:", round(avg_accuracy * 100, 2), "%\n")
+  cat("Average Precision:", round(avg_precision, 3), "\n")
+  cat("Average Recall:", round(avg_recall, 3), "\n")
+  cat("Average F1 Score:", round(avg_f1, 3), "\n")
+  cat("Average AUC:", round(avg_auc, 3), "\n")
+  
+  # Aggregate feature importance across folds
+  feature_importance <- data.frame(Feature = character(), Count = integer(), Mean_Coef = numeric())
+  
+  for (i in successful_folds) {
+    # Get non-zero coefficients
+    coefs <- lasso_results[[i]]$nonzero_coefs
+    
+    # Add each feature to the importance dataframe
+    for (j in 1:nrow(coefs)) {
+      feature_name <- rownames(coefs)[j]
+      coef_value <- coefs[j, 1]
+      
+      # If feature exists, increment count and update mean
+      if (feature_name %in% feature_importance$Feature) {
+        idx <- which(feature_importance$Feature == feature_name)
+        feature_importance$Count[idx] <- feature_importance$Count[idx] + 1
+        feature_importance$Mean_Coef[idx] <- (feature_importance$Mean_Coef[idx] * (feature_importance$Count[idx] - 1) + coef_value) / feature_importance$Count[idx]
+      } else {
+        # Add new feature
+        feature_importance <- rbind(feature_importance, data.frame(
+          Feature = feature_name,
+          Count = 1,
+          Mean_Coef = coef_value
+        ))
+      }
+    }
+  }
+  
+  # Sort by frequency and then by absolute coefficient
+  feature_importance$Abs_Coef <- abs(feature_importance$Mean_Coef)
+  feature_importance <- feature_importance[order(-feature_importance$Count, -feature_importance$Abs_Coef), ]
+  
+  cat("\n======== FEATURE IMPORTANCE ACROSS FOLDS ========\n")
+  cat("Features selected in at least 2 folds:\n")
+  print(feature_importance[feature_importance$Count >= 2, ])
+  
+  # Compare with other models if they exist
+  models_to_compare <- c("LASSO (with class weights)")
+  accuracy_values <- c(avg_accuracy)
+  precision_values <- c(avg_precision)
+  recall_values <- c(avg_recall)
+  f1_values <- c(avg_f1)
+  auc_values <- c(avg_auc)
+  
+  if (exists("xgb_results")) {
+    models_to_compare <- c(models_to_compare, "XGBoost")
+    xgb_successful <- which(sapply(xgb_results, function(x) isTRUE(x$success)))
+    if (length(xgb_successful) > 0) {
+      accuracy_values <- c(accuracy_values, mean(sapply(xgb_results[xgb_successful], function(x) x$accuracy), na.rm = TRUE))
+      precision_values <- c(precision_values, mean(sapply(xgb_results[xgb_successful], function(x) x$precision), na.rm = TRUE))
+      recall_values <- c(recall_values, mean(sapply(xgb_results[xgb_successful], function(x) x$recall), na.rm = TRUE))
+      f1_values <- c(f1_values, mean(sapply(xgb_results[xgb_successful], function(x) x$f1_score), na.rm = TRUE))
+      auc_values <- c(auc_values, mean(sapply(xgb_results[xgb_successful], function(x) x$auc), na.rm = TRUE))
+    }
+  }
+  
+  if (exists("lda_results")) {
+    models_to_compare <- c(models_to_compare, "LDA")
+    accuracy_values <- c(accuracy_values, mean(sapply(lda_results, function(x) x$accuracy), na.rm = TRUE))
+    precision_values <- c(precision_values, mean(sapply(lda_results, function(x) x$precision), na.rm = TRUE))
+    recall_values <- c(recall_values, mean(sapply(lda_results, function(x) x$recall), na.rm = TRUE))
+    f1_values <- c(f1_values, mean(sapply(lda_results, function(x) x$f1_score), na.rm = TRUE))
+    auc_values <- c(auc_values, mean(sapply(lda_results, function(x) x$auc), na.rm = TRUE))
+  }
+  
+  if (exists("knn_results")) {
+    models_to_compare <- c(models_to_compare, "kNN")
+    knn_successful <- which(sapply(knn_results, function(x) isTRUE(x$success)))
+    if (length(knn_successful) > 0) {
+      accuracy_values <- c(accuracy_values, mean(sapply(knn_results[knn_successful], function(x) x$accuracy), na.rm = TRUE))
+      precision_values <- c(precision_values, mean(sapply(knn_results[knn_successful], function(x) x$precision), na.rm = TRUE))
+      recall_values <- c(recall_values, mean(sapply(knn_results[knn_successful], function(x) x$recall), na.rm = TRUE))
+      f1_values <- c(f1_values, mean(sapply(knn_results[knn_successful], function(x) x$f1_score), na.rm = TRUE))
+      auc_values <- c(auc_values, mean(sapply(knn_results[knn_successful], function(x) x$auc), na.rm = TRUE))
+    }
+  }
+  
+  if (exists("results")) {  # Logistic regression results
+    models_to_compare <- c(models_to_compare, "Logistic Regression")
+    accuracy_values <- c(accuracy_values, mean(sapply(results, function(x) x$accuracy), na.rm = TRUE))
+    precision_values <- c(precision_values, mean(sapply(results, function(x) x$precision), na.rm = TRUE))
+    recall_values <- c(recall_values, mean(sapply(results, function(x) x$recall), na.rm = TRUE))
+    f1_values <- c(f1_values, mean(sapply(results, function(x) x$f1_score), na.rm = TRUE))
+    auc_values <- c(auc_values, mean(sapply(results, function(x) x$auc), na.rm = TRUE))
+  }
+  
+  comparison <- data.frame(
+    Model = models_to_compare,
+    Accuracy = accuracy_values,
+    Precision = precision_values,
+    Recall = recall_values,
+    F1_Score = f1_values,
+    AUC = auc_values
+  )
+  
+  cat("\n======== MODEL COMPARISON ========\n")
+  print(comparison)
+} else {
+  cat("\nNo successful LASSO model fits to report\n")
+}
+```
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ Link to conversation with Claude AI, that assisted us in building and debugging the code for this project: https://claude.ai/share/4e49ce8d-b92e-4672-96a1-979c87d995fe 
+  
